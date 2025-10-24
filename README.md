@@ -99,7 +99,7 @@ LLM_MODEL=claude-3-5-sonnet-20241022
 - Get API key: https://console.anthropic.com/
 
 #### **OpenAI GPT** 🧠
-- Models: `gpt-4`, `gpt-4-turbo`, `gpt-4o`, `gpt-4o-mini`, `gpt-3.5-turbo`, `gpt-3.5-turbo-16k`
+- Models: `gpt-4.1-mini`, `gpt-4`, `gpt-4-turbo`, `gpt-4o`, `gpt-4o-mini`, `gpt-3.5-turbo`, `gpt-3.5-turbo-16k`
 - Get API key: https://platform.openai.com/api-keys
 
 #### **Google Gemini** ✨
