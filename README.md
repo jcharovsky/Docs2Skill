@@ -69,7 +69,7 @@ The script auto-installs all required dependencies on first run.
 
 ```bash
 # Copy the example config
-cp .env.example .env
+cp env.example .env
 
 # Edit .env with your preferred editor
 nano .env
@@ -344,7 +344,7 @@ All dependencies are auto-installed on first run:
 ## Troubleshooting
 
 ### "LLM_API_KEY not found"
-Make sure you've created a `.env` file (not `.env.example`) and added your API key.
+Make sure you've created a `.env` file (not `env.example`) and added your API key.
 
 ### "No links found"
 The starting URL might not have any links, or the page failed to load. Check the URL and try again.

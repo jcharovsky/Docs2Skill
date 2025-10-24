@@ -72,7 +72,7 @@ class LLMConfig:
         if not self.api_key:
             raise ValueError(
                 "LLM_API_KEY not found. Please create a .env file with your API key.\n"
-                "See .env.example for template."
+                "See env.example for template."
             )
         if self.provider not in self.PROVIDER_DEFAULTS:
             print(f"Warning: Unknown provider '{self.provider}'. Supported: {list(self.PROVIDER_DEFAULTS.keys())}")
@@ -523,7 +523,7 @@ def generate_skill_md(extracted_name, source_url, output_dir):
     except ValueError as e:
         print(f"\n✗ Configuration error: {e}")
         print("\nSkipping SKILL.md generation. To enable:")
-        print("1. Copy .env.example to .env")
+        print("1. Copy env.example to .env")
         print("2. Add your LLM API key and configuration")
         return output_dir  # Return original directory
 
