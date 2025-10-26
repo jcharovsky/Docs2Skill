@@ -554,13 +554,39 @@ Remember: All documentation files are in the resources/ subdirectory."""
         print(f"Calling {config.provider} ({config.model})...")
         llm_response = call_llm(config, user_message)
 
-        # Parse JSON response
+        # Parse JSON response (strip markdown code fences if present)
         try:
-            response_data = json.loads(llm_response)
+            # Remove markdown code fences if present
+            cleaned_response = llm_response.strip()
+            if cleaned_response.startswith('```'):
+                # Find the end of the opening fence (could be ```json or just ```)
+                first_newline = cleaned_response.find('\n')
+                if first_newline != -1:
+                    cleaned_response = cleaned_response[first_newline + 1:]
+                # Remove closing fence
+                if cleaned_response.endswith('```'):
+                    cleaned_response = cleaned_response[:-3].rstrip()
+
+            # Remove line continuation backslashes that some LLMs add (invalid JSON)
+            # Replace "\ followed by newline" with just the newline
+            cleaned_response = cleaned_response.replace('\\\n', '')
+
+            response_data = json.loads(cleaned_response)
             cleaned_name = response_data.get('cleaned_name', extracted_name)
             skill_content = response_data.get('skill_content', '')
-        except json.JSONDecodeError:
-            print("Warning: LLM did not return valid JSON. Using extracted name as-is.")
+
+            if not skill_content:
+                print("Warning: skill_content is empty in JSON response")
+                print(f"Response keys: {list(response_data.keys())}")
+
+        except json.JSONDecodeError as e:
+            print(f"✗ JSON parsing failed: {e}")
+            print(f"First 200 chars of response: {llm_response[:200]}")
+            print("Using extracted name as-is and raw response as content.")
+            cleaned_name = extracted_name
+            skill_content = llm_response
+        except Exception as e:
+            print(f"✗ Unexpected error parsing LLM response: {e}")
             cleaned_name = extracted_name
             skill_content = llm_response
 

@@ -1,4 +1,4 @@
-# Environment Configuration (NEVER COMMIT API KEYS!)
+# Environment Configuration
 .env
 
 # Python
