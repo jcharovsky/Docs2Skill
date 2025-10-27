@@ -283,7 +283,7 @@ Claude: [Activates use-phantombuster skill]
 
 The generated SKILL.md contains:
 
-1. **YAML Frontmatter** - Skill name (with `use-` prefix), description for discovery, version (1.0.0), and optional dependencies
+1. **YAML Frontmatter** - Skill name (with `use-` prefix) and description for discovery
 2. **Instructions** - How Claude should use the documentation in resources/
 3. **Examples** - Sample questions and interaction patterns
 
@@ -309,8 +309,6 @@ Generated skills follow all official requirements:
 
 - **Name validation**: Lowercase only, max 64 characters, no reserved words ("anthropic", "claude"), no XML tags
 - **Description format**: Max 1024 characters, written in third person, includes specific trigger terms, no XML tags
-- **Version field**: Semantic versioning (1.0.0) for tracking iterations
-- **Dependencies field**: Optional, documents required packages if applicable
 - **500-line body limit**: Keeps SKILL.md under 500 lines for optimal performance
 - **Progressive disclosure**: Main content in SKILL.md, detailed content in resources/
 - **One-level-deep references**: All resource files link directly from SKILL.md (no nested chains)
