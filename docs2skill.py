@@ -473,6 +473,162 @@ def scrape_url(url, output_dir):
         return False
 
 
+def get_grouping_key_from_url(url):
+    """
+    Extract grouping key from URL based on path depth.
+    - URLs with 0-3 path segments: return full path (each gets own file)
+    - URLs with 4+ path segments: return first 3 segments (merged together)
+
+    Examples:
+        https://docs.n8n.io/ -> ''
+        https://docs.n8n.io/integrations/ -> 'integrations'
+        https://docs.n8n.io/integrations/builtin/ -> 'integrations/builtin'
+        https://docs.n8n.io/integrations/builtin/core-nodes/ -> 'integrations/builtin/core-nodes'
+        https://docs.n8n.io/integrations/builtin/core-nodes/httpRequest/ -> 'integrations/builtin/core-nodes' (grouped)
+        https://docs.n8n.io/integrations/builtin/core-nodes/webHook/ -> 'integrations/builtin/core-nodes' (grouped)
+    """
+    parsed = urlparse(url)
+    path = parsed.path.strip('/')
+
+    if not path:
+        return 'index'
+
+    segments = path.split('/')
+
+    # If 3 or fewer segments, use full path (each gets own file)
+    if len(segments) <= 3:
+        return path
+
+    # If 4 or more segments, use only first 3 (merge together)
+    return '/'.join(segments[:3])
+
+
+def group_and_merge_files(output_dir):
+    """
+    Group and merge markdown files based on URL path depth.
+    Files from URLs with 4+ path segments are merged based on first 3 segments.
+    """
+    resources_dir = os.path.join(output_dir, 'resources')
+
+    if not os.path.exists(resources_dir):
+        return
+
+    print("\n" + "="*60)
+    print("Grouping and merging files...")
+    print("="*60)
+
+    # Read all files and extract their source URLs
+    file_data = {}  # {filepath: (url, content)}
+
+    for filename in os.listdir(resources_dir):
+        if not filename.endswith('.md'):
+            continue
+
+        filepath = os.path.join(resources_dir, filename)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Extract source URL from file (it's in the format: **Source URL:** {url})
+            url_match = re.search(r'\*\*Source URL:\*\*\s+(.+)', content)
+            if url_match:
+                source_url = url_match.group(1).strip()
+                file_data[filepath] = (source_url, content)
+        except Exception as e:
+            print(f"Warning: Could not read {filename}: {e}")
+
+    # Group files by their grouping key
+    groups = {}  # {grouping_key: [(url, content), ...]}
+
+    for filepath, (url, content) in file_data.items():
+        grouping_key = get_grouping_key_from_url(url)
+        if grouping_key not in groups:
+            groups[grouping_key] = []
+        groups[grouping_key].append((url, content, filepath))
+
+    # Process each group
+    files_before = len(file_data)
+    files_after = 0
+    merged_count = 0
+
+    for grouping_key, items in groups.items():
+        # Create filename from grouping key
+        grouped_filename = grouping_key.replace('/', '-') + '.md'
+        if grouped_filename == '.md':
+            grouped_filename = 'index.md'
+
+        grouped_filepath = os.path.join(resources_dir, grouped_filename)
+
+        if len(items) == 1:
+            # Single file - check if it needs renaming to match grouping key
+            url, content, original_filepath = items[0]
+            original_filename = os.path.basename(original_filepath)
+
+            if original_filename != grouped_filename and original_filepath != grouped_filepath:
+                # Rename to match grouping key (if not already named correctly)
+                if not os.path.exists(grouped_filepath):
+                    os.rename(original_filepath, grouped_filepath)
+                    print(f"  Renamed: {original_filename} -> {grouped_filename}")
+                else:
+                    print(f"  Warning: Target file {grouped_filename} already exists, keeping {original_filename}")
+
+            files_after += 1
+        else:
+            # Multiple files - merge them
+            merged_content_parts = []
+
+            # Sort items by URL for consistent ordering
+            items.sort(key=lambda x: x[0])
+
+            for url, content, _ in items:
+                # Extract just the content (skip the header we added)
+                # Content format: # title\n\n**Source URL:** url\n\n---\n\ncontent
+                content_lines = content.split('\n')
+
+                # Find where actual content starts (after the --- separator)
+                content_start_idx = 0
+                for i, line in enumerate(content_lines):
+                    if line.strip() == '---':
+                        content_start_idx = i + 1
+                        break
+
+                actual_content = '\n'.join(content_lines[content_start_idx:]).strip()
+
+                # Create section with URL as header
+                parsed = urlparse(url)
+                path = parsed.path.strip('/')
+                section_title = path.split('/')[-1] or 'Home'
+                section_title = section_title.replace('-', ' ').title()
+
+                merged_content_parts.append(f"## {section_title}\n\n**Source:** {url}\n\n{actual_content}")
+
+            # Create merged file with a title
+            group_title = grouping_key.replace('/', ' - ').replace('-', ' ').title()
+            if group_title == 'Index':
+                group_title = 'Home'
+
+            merged_content = f"# {group_title}\n\n" + "\n\n---\n\n".join(merged_content_parts)
+
+            # Save merged file
+            with open(grouped_filepath, 'w', encoding='utf-8') as f:
+                f.write(merged_content)
+
+            # Delete original files
+            for _, _, original_filepath in items:
+                if os.path.exists(original_filepath):
+                    os.remove(original_filepath)
+
+            merged_count += len(items)
+            files_after += 1
+            print(f"  Merged {len(items)} files -> {grouped_filename}")
+
+    print(f"\n✓ Grouping complete:")
+    print(f"  Files before: {files_before}")
+    print(f"  Files after: {files_after}")
+    print(f"  Files merged: {merged_count}")
+    print(f"  Reduction: {files_before - files_after} files")
+
+
 def prepare_context_from_files(output_dir):
     """Read scraped markdown files and prepare context for LLM"""
     md_files = []
@@ -684,6 +840,10 @@ def main():
     print(f"\n{'='*60}")
     print(f"Scraped {successful}/{len(links)} pages successfully")
     print(f"Files saved to: {os.path.abspath(args.output)}")
+
+    # Group and merge files based on URL path depth
+    if successful > 0:
+        group_and_merge_files(args.output)
 
     # Generate SKILL.md file
     if successful > 0:
