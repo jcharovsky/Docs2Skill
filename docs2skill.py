@@ -88,21 +88,17 @@ Your task is to create a SKILL.md file that enables Claude to effectively use th
 
 ## SKILL.md Structure Requirements:
 
-1. **YAML Frontmatter** (required and optional fields):
+1. **YAML Frontmatter** (only required fields - do NOT include any other fields):
 ```yaml
 ---
 name: skill-name-here
 description: |
   Brief description of what this skill does and when Claude should use it.
   Must be specific and include trigger terms. Max 1024 characters.
-version: 1.0.0
-dependencies: python>=3.8, package>=1.0.0
 ---
 ```
 
-Note: `version` and `dependencies` are optional but recommended:
-- **version**: Use semantic versioning (e.g., "1.0.0") or date-based (e.g., "2025-01-24")
-- **dependencies**: Only include if the documentation describes code that requires specific packages. For pure documentation skills, this can be omitted.
+Note: Only `name` and `description` are allowed. Do NOT include `version`, `dependencies`, or any other fields not listed here.
 
 2. **Name Requirements**:
    - Lowercase only
@@ -177,11 +173,10 @@ You MUST respond with a JSON object containing two fields:
    - No hyphens or spaces, just the clean product name
 
 2. **skill_content**: A complete SKILL.md file that:
-   - Has proper YAML frontmatter with:
+   - Has proper YAML frontmatter with ONLY these fields:
      * `name: use-{cleaned_name}` (e.g., "use-phantombuster", "use-n8n")
      * `description` in third person with specific trigger terms
-     * `version` field (use "1.0.0" for new skills)
-     * `dependencies` field (optional - only include if the documentation describes specific package requirements)
+     * DO NOT include any other fields like `version`, `dependencies`, etc.
    - Provides clear instructions for Claude on how to use the documentation in resources/
    - Includes relevant examples
    - Uses forward slashes for all file paths (e.g., resources/guide.md)
