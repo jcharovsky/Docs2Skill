@@ -43,7 +43,7 @@ Everything stays lowercase with hyphens, following Claude Code skill naming conv
 
 ## Features
 
-- 🔄 **Auto-dependency installation** - No manual pip install needed
+- 🔄 **Reproducible dependencies:** `uv` creates the isolated environment from the committed lockfile
 - 🌐 **Universal LLM support** - Works with Anthropic Claude, OpenAI GPT, Google Gemini, xAI Grok, OpenRouter, and local models via Ollama (Mistral, DeepSeek, Qwen, Llama, and more)
 - 🎯 **Smart domain filtering** - Only scrapes same-domain links by default
 - 📁 **Smart folder naming** - URL parsing + LLM cleanup for playful URLs, with `use-` prefix (e.g., `use-phantombuster`, `use-n8n`)
@@ -54,14 +54,15 @@ Everything stays lowercase with hyphens, following Claude Code skill naming conv
 
 ## Installation
 
-No installation needed! Just clone and run:
+Clone the repository and synchronize its isolated Python environment:
 
 ```bash
 git clone https://github.com/jcharovsky/Docs2Skill.git
 cd Docs2Skill
+uv sync
 ```
 
-The script auto-installs all required dependencies on first run.
+The project requires `uv`. Dependencies are declared in `pyproject.toml` and resolved reproducibly through `uv.lock`.
 
 ## Configuration
 
@@ -132,7 +133,7 @@ LLM_MODEL=claude-3-5-sonnet-20241022
 ### Basic Usage
 
 ```bash
-python3 docs2skill.py https://docs.example.com
+uv run docs2skill.py https://docs.example.com
 ```
 
 This will:
@@ -149,18 +150,18 @@ The skill folder is created as a sibling to Docs2Skill, keeping the tool directo
 
 **Scrape all domains** (including external links):
 ```bash
-python3 docs2skill.py https://docs.example.com --all-domains
+uv run docs2skill.py https://docs.example.com --all-domains
 ```
 
 **Custom output folder**:
 ```bash
-python3 docs2skill.py https://docs.example.com -o my_custom_folder
+uv run docs2skill.py https://docs.example.com -o my_custom_folder
 ```
 
 **Skip LLM generation** (just scrape docs):
 ```bash
 # Simply don't configure .env - script will skip SKILL.md generation
-python3 docs2skill.py https://docs.example.com
+uv run docs2skill.py https://docs.example.com
 ```
 
 ## Output Structure
@@ -171,6 +172,9 @@ After running the script from inside the Docs2Skill folder, you'll get:
 parent/
 ├── Docs2Skill/                       # Tool directory (stays clean)
 │   ├── docs2skill.py
+│   ├── .python-version
+│   ├── pyproject.toml
+│   ├── uv.lock
 │   ├── .env
 │   └── README.md
 └── use-phantombuster/                # Generated skill (with use- prefix)
@@ -332,7 +336,7 @@ The LLM generates high-quality, maintainable skills:
 
 ## Requirements
 
-All dependencies are auto-installed on first run:
+Run `uv sync` after cloning or pulling dependency changes. The isolated environment contains:
 - `requests` - HTTP requests
 - `beautifulsoup4` - HTML parsing
 - `html2text` - HTML to Markdown conversion
@@ -360,7 +364,7 @@ The script may be processing - give it a moment. For very small sites, the progr
 ### Scrape Phantombuster Documentation
 ```bash
 cd Docs2Skill
-python3 docs2skill.py https://hub.phantombuster.com/reference
+uv run docs2skill.py https://hub.phantombuster.com/reference
 ```
 
 Output: `../use-phantombuster/` folder with SKILL.md + resources/ containing all API docs
@@ -368,7 +372,7 @@ Output: `../use-phantombuster/` folder with SKILL.md + resources/ containing all
 ### Scrape Brightdata Docs
 ```bash
 cd Docs2Skill
-python3 docs2skill.py https://docs.brightdata.com
+uv run docs2skill.py https://docs.brightdata.com
 ```
 
 Output: `../use-brightdata/` folder with SKILL.md + resources/ containing all docs
@@ -376,7 +380,7 @@ Output: `../use-brightdata/` folder with SKILL.md + resources/ containing all do
 ### Scrape n8n Documentation
 ```bash
 cd Docs2Skill
-python3 docs2skill.py https://docs.n8n.io
+uv run docs2skill.py https://docs.n8n.io
 ```
 
 Output: `../use-n8n/` folder with SKILL.md + resources/ containing all docs
@@ -384,7 +388,7 @@ Output: `../use-n8n/` folder with SKILL.md + resources/ containing all docs
 ### Scrape from Playful URL
 ```bash
 cd Docs2Skill
-python3 docs2skill.py https://www.getsuperapp.io/docs
+uv run docs2skill.py https://www.getsuperapp.io/docs
 ```
 
 Output: `../use-superapp/` folder (automatically cleaned from "getsuperapp")

@@ -4,45 +4,17 @@ Markdown Scraper - Scrapes HTML content and converts to Markdown from all sub-UR
 """
 
 import argparse
+import json
 import os
-import sys
 import re
-import subprocess
+import sys
 from urllib.parse import urljoin, urlparse
 
-# Auto-install dependencies if missing
-def install_requirements():
-    """Install required packages if not already installed"""
-    required_packages = {
-        'requests': 'requests',
-        'bs4': 'beautifulsoup4',
-        'html2text': 'html2text',
-        'dotenv': 'python-dotenv',
-        'tqdm': 'tqdm'
-    }
-
-    missing_packages = []
-    for import_name, package_name in required_packages.items():
-        try:
-            __import__(import_name)
-        except ImportError:
-            missing_packages.append(package_name)
-
-    if missing_packages:
-        print(f"Installing missing dependencies: {', '.join(missing_packages)}")
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install'] + missing_packages)
-        print("Dependencies installed successfully!\n")
-
-# Install requirements before importing
-install_requirements()
-
+import html2text
 import requests
 from bs4 import BeautifulSoup
-import html2text
 from dotenv import load_dotenv
-import json
 from tqdm import tqdm
-
 
 # Load environment variables
 load_dotenv()

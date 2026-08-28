@@ -1,0 +1,16 @@
+[project]
+name = "docs2skill"
+version = "0.1.0"
+description = "Convert documentation websites into Claude Code skills."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4",
+    "html2text",
+    "python-dotenv",
+    "requests",
+    "tqdm",
+]
+
+[tool.uv]
+package = false
