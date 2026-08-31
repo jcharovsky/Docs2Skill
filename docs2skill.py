@@ -16,10 +16,6 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-# Load environment variables
-load_dotenv()
-
-
 # LLM Configuration
 class LLMConfig:
     """Configuration for LLM API calls"""
@@ -54,7 +50,7 @@ class LLMConfig:
 
 
 # System prompt for SKILL.md generation
-SKILL_GENERATION_PROMPT = """You are an expert at creating Claude Code Skills based on documentation.
+CLAUDE_SKILL_GENERATION_PROMPT = """You are an expert at creating Claude Code Skills based on documentation.
 
 Your task is to create a SKILL.md file that enables Claude to effectively use the provided documentation to help users.
 
@@ -157,19 +153,58 @@ You MUST respond with a JSON object containing two fields:
 Output ONLY valid JSON with these two fields, nothing else."""
 
 
-def call_llm(config, user_message):
+CODEX_SKILL_GENERATION_PROMPT = """You are an expert at creating Codex skills based on documentation.
+
+Your task is to create a complete, Codex-compatible SKILL.md file that enables Codex to answer users accurately from the provided documentation.
+
+## SKILL.md requirements
+
+1. Begin the file with YAML frontmatter delimited by `---` lines.
+2. Include these required frontmatter fields:
+   - `name`: lowercase letters, numbers, and hyphens only, at most 64 characters.
+   - `description`: a concrete third-person description that says what the skill does and when to use it. Include product and API trigger terms. Keep it at most 1024 characters.
+3. Name the skill `use-{cleaned_name}`.
+4. Keep the body concise and actionable. It must explain how Codex should identify and read relevant Markdown files in `resources/` before answering.
+5. Use progressive disclosure. Keep detailed documentation in `resources/`, and reference files directly from SKILL.md with forward-slash paths.
+6. Give a clear default when multiple approaches exist, use consistent terminology, and distinguish deprecated patterns when the documentation does.
+7. Include two or three brief example user requests. Do not include Claude Code, Claude.ai, Anthropic, or deployment instructions.
+
+## Source material
+
+You will receive an extracted domain name, the source URL, and a list of Markdown files in `resources/`. The content of those resource files is shared with the Claude Code target. Do not add, rename, or refer to files outside `resources/`.
+
+## Output format
+
+Respond only with this valid JSON object:
+```json
+{
+  "cleaned_name": "productname",
+  "skill_content": "---\\nname: use-productname\\ndescription: |\\n  ...\\n---\\n..."
+}
+```
+
+`cleaned_name` must be lowercase and contain no spaces or hyphens. Remove marketing prefixes such as `get`, `try`, `use`, or `my` when they are present. Keep an already-clean product name unchanged."""
+
+
+SKILL_GENERATION_PROMPTS = {
+    'claude': CLAUDE_SKILL_GENERATION_PROMPT,
+    'codex': CODEX_SKILL_GENERATION_PROMPT,
+}
+
+
+def call_llm(config, system_prompt, user_message):
     """Call LLM API based on provider"""
     if config.provider == 'anthropic':
-        return call_anthropic(config, user_message)
+        return call_anthropic(config, system_prompt, user_message)
     elif config.provider == 'gemini':
-        return call_gemini(config, user_message)
+        return call_gemini(config, system_prompt, user_message)
     elif config.provider in ['openai', 'openrouter', 'grok', 'ollama']:
-        return call_openai_compatible(config, user_message)
+        return call_openai_compatible(config, system_prompt, user_message)
     else:
         raise ValueError(f"Unsupported provider: {config.provider}")
 
 
-def call_anthropic(config, user_message):
+def call_anthropic(config, system_prompt, user_message):
     """Call Anthropic Messages API"""
     headers = {
         'x-api-key': config.api_key,
@@ -181,7 +216,7 @@ def call_anthropic(config, user_message):
         'model': config.model,
         'max_tokens': 4096,
         'temperature': 0.7,
-        'system': SKILL_GENERATION_PROMPT,
+        'system': system_prompt,
         'messages': [
             {
                 'role': 'user',
@@ -197,7 +232,7 @@ def call_anthropic(config, user_message):
     return result['content'][0]['text']
 
 
-def call_openai_compatible(config, user_message):
+def call_openai_compatible(config, system_prompt, user_message):
     """Call OpenAI-compatible API (OpenAI, OpenRouter, Grok, Ollama, etc.)"""
     headers = {
         'Content-Type': 'application/json'
@@ -218,7 +253,7 @@ def call_openai_compatible(config, user_message):
         'messages': [
             {
                 'role': 'system',
-                'content': SKILL_GENERATION_PROMPT
+                'content': system_prompt
             },
             {
                 'role': 'user',
@@ -234,7 +269,7 @@ def call_openai_compatible(config, user_message):
     return result['choices'][0]['message']['content']
 
 
-def call_gemini(config, user_message):
+def call_gemini(config, system_prompt, user_message):
     """Call Google Gemini API"""
     # Gemini endpoint format: {base_url}{model}:generateContent
     # If config.endpoint ends with '/', it's the base URL
@@ -254,7 +289,7 @@ def call_gemini(config, user_message):
             {
                 'parts': [
                     {
-                        'text': f"{SKILL_GENERATION_PROMPT}\n\n{user_message}"
+                        'text': f"{system_prompt}\n\n{user_message}"
                     }
                 ]
             }
@@ -633,8 +668,46 @@ def prepare_context_from_files(output_dir):
     return md_files, file_summaries
 
 
-def generate_skill_md(extracted_name, source_url, output_dir):
-    """Generate SKILL.md file using LLM and clean playful URL names"""
+def validate_codex_skill_content(skill_content):
+    """Return an error message when SKILL.md is not Codex-compatible."""
+    frontmatter_match = re.match(r'\A---\s*\n(.*?)\n---\s*(?:\n|\Z)', skill_content, re.DOTALL)
+    if not frontmatter_match:
+        return 'SKILL.md must begin with YAML frontmatter delimited by --- lines.'
+
+    frontmatter = frontmatter_match.group(1)
+    name_match = re.search(r'^name:\s*["\']?([^"\'\s]+)["\']?\s*$', frontmatter, re.MULTILINE)
+    if not name_match:
+        return 'SKILL.md frontmatter must include a name.'
+
+    name = name_match.group(1)
+    if not name.startswith('use-'):
+        return 'SKILL.md name must begin with use-.'
+    if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', name) or len(name) > 64:
+        return 'SKILL.md name must use lowercase letters, numbers, and hyphens, and be at most 64 characters.'
+
+    description_match = re.search(r'^description:\s*(?:\||>|.+)$', frontmatter, re.MULTILINE)
+    if not description_match:
+        return 'SKILL.md frontmatter must include a description.'
+
+    if description_match.group(0).rstrip().endswith(('|', '>')):
+        description_lines = re.findall(r'^[ \t]+(.+)$', frontmatter[description_match.end():], re.MULTILINE)
+        description = '\n'.join(description_lines)
+    else:
+        description = description_match.group(0).split(':', 1)[1].strip()
+    if not description or len(description) > 1024:
+        return 'SKILL.md description must be between 1 and 1024 characters.'
+
+    body = skill_content[frontmatter_match.end():].strip()
+    if not body:
+        return 'SKILL.md must include instructions after its frontmatter.'
+    if 'resources/' not in body:
+        return 'SKILL.md instructions must reference the resources/ directory.'
+
+    return None
+
+
+def generate_skill_md(extracted_name, source_url, output_dir, skill_type):
+    """Generate a target-specific SKILL.md file using an LLM."""
     print("\n" + "="*60)
     print("Generating SKILL.md file...")
     print("="*60)
@@ -675,7 +748,7 @@ Remember: All documentation files are in the resources/ subdirectory."""
     # Call LLM
     try:
         print(f"Calling {config.provider} ({config.model})...")
-        llm_response = call_llm(config, user_message)
+        llm_response = call_llm(config, SKILL_GENERATION_PROMPTS[skill_type], user_message)
 
         # Parse JSON response (strip markdown code fences if present)
         try:
@@ -713,6 +786,12 @@ Remember: All documentation files are in the resources/ subdirectory."""
             cleaned_name = extracted_name
             skill_content = llm_response
 
+        if skill_type == 'codex':
+            validation_error = validate_codex_skill_content(skill_content)
+            if validation_error:
+                print(f"✗ Invalid Codex SKILL.md: {validation_error}")
+                return output_dir
+
         # Create final skill name with "use-" prefix
         final_skill_name = f"use-{cleaned_name}"
 
@@ -744,11 +823,15 @@ Remember: All documentation files are in the resources/ subdirectory."""
         print(f"✅ Skill created successfully!")
         print(f"{'='*60}")
         print(f"\nLocation: {os.path.abspath(output_dir)}")
-        print(f"\nDeploy to Claude platforms:")
-        print(f"  • Claude Code:      cp -r {output_dir} ~/.claude/skills/")
-        print(f"  • Claude.ai/Desktop: ZIP and upload via Settings > Features")
-        print(f"  • Agent SDK:        cp -r {output_dir} <project>/.claude/skills/")
-        print(f"  • Claude API:       Upload via /v1/skills endpoint")
+        if skill_type == 'claude':
+            print(f"\nDeploy to Claude platforms:")
+            print(f"  • Claude Code:      cp -r {output_dir} ~/.claude/skills/")
+            print(f"  • Claude.ai/Desktop: ZIP and upload via Settings > Features")
+            print(f"  • Agent SDK:        cp -r {output_dir} <project>/.claude/skills/")
+            print(f"  • Claude API:       Upload via /v1/skills endpoint")
+        else:
+            print(f"\nDeploy to Codex:")
+            print(f"  • Personal skill:   cp -r {output_dir} ~/.codex/skills/")
         print(f"\nSee README.md 'Deploying Generated Skills' section for full instructions")
         return output_dir  # Return potentially renamed directory
 
@@ -765,6 +848,12 @@ def main():
     )
     parser.add_argument('--url', required=True, help='The URL to scrape content from')
     parser.add_argument(
+        '--type',
+        required=True,
+        choices=('claude', 'codex'),
+        help='The skill format to generate'
+    )
+    parser.add_argument(
         '-o', '--output',
         default=None,
         help='Output directory for markdown files (default: ../{domain})'
@@ -776,6 +865,9 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Load credentials only for an actual run, never while importing this module.
+    load_dotenv()
 
     # Set output directory to ../{extracted_name} (parent directory) if not specified
     # This will be renamed later to "use-{cleaned_name}" by the LLM
@@ -821,7 +913,7 @@ def main():
     if successful > 0:
         # Extract domain name for LLM to clean
         extracted_name = get_domain_name(args.url)
-        final_output_dir = generate_skill_md(extracted_name, args.url, args.output)
+        final_output_dir = generate_skill_md(extracted_name, args.url, args.output, args.type)
         # Update args.output in case the directory was renamed
         args.output = final_output_dir
 

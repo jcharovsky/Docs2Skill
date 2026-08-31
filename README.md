@@ -1,10 +1,10 @@
 # Docs2Skill
 
-**Automatically convert any documentation website into a Claude Code Skill.**
+**Automatically convert any documentation website into a Claude Code or Codex skill.**
 
-Docs2Skill scrapes documentation websites, converts them to Markdown, and uses an LLM to generate a complete Claude Code Skill that enables Claude to effectively use that documentation to help users.
+Docs2Skill scrapes documentation websites, converts them to Markdown, and uses an LLM to generate a complete skill that enables Claude Code or Codex to effectively use that documentation to help users.
 
-## What is a Claude Code Skill?
+## What is a Skill?
 
 A Claude Code Skill is a modular capability that extends Claude's functionality. Skills contain instructions and supporting materials that Claude can automatically discover and use based on user requests.
 
@@ -15,7 +15,7 @@ A Claude Code Skill is a modular capability that extends Claude's functionality.
 3. **Converts** HTML to clean Markdown format
 4. **Cleans playful URLs** using LLM (e.g., `getsuperapp` → `superapp`)
 5. **Creates skill name** with `use-` prefix (e.g., `use-phantombuster`, `use-n8n`)
-6. **Generates** a SKILL.md file using an LLM that tells Claude how to use the docs
+6. **Generates** a target-specific SKILL.md file using an LLM
 7. **Creates** a ready-to-use skill folder with all documentation
 
 The result is a lightweight RAG system that uses grep-based search instead of vector databases - perfect for technical documentation where exact term matching works well.
@@ -49,7 +49,7 @@ Everything stays lowercase with hyphens, following Claude Code skill naming conv
 - 📁 **Smart folder naming** - URL parsing + LLM cleanup for playful URLs, with `use-` prefix (e.g., `use-phantombuster`, `use-n8n`)
 - 📄 **Descriptive filenames** - Uses multiple URL path segments for better discoverability (e.g., `api-authentication` not just `authentication`)
 - 📊 **Progress tracking** - Visual progress bar for large scrapes
-- 🤖 **Automated SKILL.md generation** - LLM creates optimized instructions following Claude Code best practices (500-line limit, table of contents for long files)
+- 🤖 **Automated SKILL.md generation** - LLM creates Claude Code or Codex instructions from the same scraped resources
 - ♻️ **Graceful fallback** - Works without LLM config (skips SKILL.md generation)
 
 ## Installation
@@ -133,7 +133,7 @@ LLM_MODEL=claude-3-5-sonnet-20241022
 ### Basic Usage
 
 ```bash
-uv run docs2skill.py --url https://docs.example.com
+uv run docs2skill.py --url https://docs.example.com --type claude
 ```
 
 This will:
@@ -142,26 +142,28 @@ This will:
 3. Convert HTML to Markdown and save to a temporary folder
 4. Clean playful URLs with LLM if needed
 5. Create final skill folder with `use-` prefix (e.g., `../use-phantombuster/`)
-6. Generate a `SKILL.md` file using your configured LLM
+6. Generate a target-specific `SKILL.md` file using your configured LLM
 
 The skill folder is created as a sibling to Docs2Skill, keeping the tool directory clean.
+
+`--type` is required. Use `claude` for a Claude Code skill or `codex` for a Codex-compatible skill. Both targets preserve the same `resources/` Markdown files.
 
 ### Advanced Options
 
 **Scrape all domains** (including external links):
 ```bash
-uv run docs2skill.py --url https://docs.example.com --all-domains
+uv run docs2skill.py --url https://docs.example.com --type claude --all-domains
 ```
 
 **Custom output folder**:
 ```bash
-uv run docs2skill.py --url https://docs.example.com -o my_custom_folder
+uv run docs2skill.py --url https://docs.example.com --type claude -o my_custom_folder
 ```
 
 **Skip LLM generation** (just scrape docs):
 ```bash
 # Simply don't configure .env - script will skip SKILL.md generation
-uv run docs2skill.py --url https://docs.example.com
+uv run docs2skill.py --url https://docs.example.com --type claude
 ```
 
 ## Output Structure
@@ -188,9 +190,22 @@ parent/
 
 ## Deploying Generated Skills
 
-Once Docs2Skill generates your skill folder, you can deploy it to any Claude platform. **Note:** Skills don't sync across platforms—you must deploy separately to each one you want to use.
+Once Docs2Skill generates your skill folder, deploy it to the selected target platform. Skills do not sync across platforms.
 
 ### Deployment Options:
+
+#### 🤖 Codex
+
+Generate the Codex format and install it as a personal skill:
+
+```bash
+uv run docs2skill.py --url https://docs.example.com --type codex
+cp -r ../use-example ~/.codex/skills/
+```
+
+The resulting `SKILL.md` uses Codex-compatible frontmatter and references the same `resources/` Markdown files as the Claude target.
+
+---
 
 #### 🖥️ **Claude Code (CLI)**
 Deploy to your local Claude Code installation for terminal-based development.
@@ -364,7 +379,7 @@ The script may be processing - give it a moment. For very small sites, the progr
 ### Scrape Phantombuster Documentation
 ```bash
 cd Docs2Skill
-uv run docs2skill.py --url https://hub.phantombuster.com/reference
+uv run docs2skill.py --url https://hub.phantombuster.com/reference --type claude
 ```
 
 Output: `../use-phantombuster/` folder with SKILL.md + resources/ containing all API docs
@@ -372,7 +387,7 @@ Output: `../use-phantombuster/` folder with SKILL.md + resources/ containing all
 ### Scrape Brightdata Docs
 ```bash
 cd Docs2Skill
-uv run docs2skill.py --url https://docs.brightdata.com
+uv run docs2skill.py --url https://docs.brightdata.com --type claude
 ```
 
 Output: `../use-brightdata/` folder with SKILL.md + resources/ containing all docs
@@ -380,7 +395,7 @@ Output: `../use-brightdata/` folder with SKILL.md + resources/ containing all do
 ### Scrape n8n Documentation
 ```bash
 cd Docs2Skill
-uv run docs2skill.py --url https://docs.n8n.io
+uv run docs2skill.py --url https://docs.n8n.io --type claude
 ```
 
 Output: `../use-n8n/` folder with SKILL.md + resources/ containing all docs
@@ -388,7 +403,7 @@ Output: `../use-n8n/` folder with SKILL.md + resources/ containing all docs
 ### Scrape from Playful URL
 ```bash
 cd Docs2Skill
-uv run docs2skill.py --url https://www.getsuperapp.io/docs
+uv run docs2skill.py --url https://www.getsuperapp.io/docs --type claude
 ```
 
 Output: `../use-superapp/` folder (automatically cleaned from "getsuperapp")
