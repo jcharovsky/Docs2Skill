@@ -149,6 +149,8 @@ You MUST respond with a JSON object containing two fields:
    - Provides clear instructions for Claude on how to use the documentation in resources/
    - Includes relevant examples
    - Uses forward slashes for all file paths (e.g., resources/guide.md)
+   - Uses only exact resource paths from the supplied file list. Every named Markdown file starts with `resources/`.
+   - When MCP documentation is present, includes MCP in the description, names its exact resource path, and distinguishes documentation from live tools for current state and requested operations.
    - Follows all best practices above
 
 Output ONLY valid JSON with these two fields, nothing else."""
@@ -171,6 +173,8 @@ Your task is to create a complete, Codex-compatible SKILL.md file that enables C
 7. Include two or three brief example user requests. Do not include Claude Code, Claude.ai, Anthropic, or deployment instructions.
 8. Tell Codex to search filenames and contents with `rg`, consult generated contents sections, and read narrow ranges instead of loading large resources in full.
 9. Include distinct documented interfaces such as APIs, SDKs, CLIs, or MCP servers in the description and routing when they appear in the filenames or sample content.
+10. Use resource paths exactly as provided. Every named Markdown file must use its complete `resources/<filename>.md` path. Do not shorten or invent filenames.
+11. When MCP documentation is present, include MCP in the description, link its exact resource path, and distinguish documentation from live MCP tools. Documentation explains behavior. Available MCP tools provide current service state and perform user-requested operations.
 
 ## Source material
 
@@ -784,7 +788,19 @@ def add_contents_section(content, minimum_lines=100):
             if match.group(1).strip().lower() != 'contents'
         ]
         if not headings:
-            return content
+            level_one_headings = [
+                match.group(1).strip()
+                for match in re.finditer(r'^#\s+(.+?)\s*$', content, re.MULTILINE)
+            ]
+            headings = level_one_headings[1:] if len(level_one_headings) > 1 else level_one_headings
+        if not headings:
+            link_labels = [
+                re.sub(r'\s+', ' ', match.group(1)).strip()
+                for match in re.finditer(r'(?<!!)\[([^\]\n]+)\]\([^)]+\)', content)
+            ]
+            headings = list(dict.fromkeys(label for label in link_labels if label))[:50]
+        if not headings:
+            headings = ['Document body']
         entries = [f'- {heading}' for heading in headings]
 
     contents_block = (
@@ -843,10 +859,42 @@ def postprocess_resource_files(output_dir):
     return stats
 
 
+CONTEXT_FILE_MARKERS = (
+    'mcp',
+    'cli',
+    'sdk',
+    'compliance',
+    'api',
+    'developer_guide',
+    'user_guide',
+)
+
+
+def select_context_files(md_files, limit=20):
+    """Select representative resources across documented interfaces."""
+    selected = []
+
+    for marker in CONTEXT_FILE_MARKERS:
+        matches = sorted(filename for filename in md_files if marker in filename.lower())
+        for filename in matches[:2]:
+            if filename not in selected:
+                selected.append(filename)
+            if len(selected) == limit:
+                return selected
+
+    for filename in md_files:
+        if filename not in selected:
+            selected.append(filename)
+        if len(selected) == limit:
+            break
+
+    return selected
+
+
 def prepare_context_from_files(output_dir):
     """Read scraped markdown files and prepare context for LLM"""
     md_files = []
-    file_summaries = []
+    file_summaries = {}
 
     # Get all .md files from resources subdirectory
     resources_dir = os.path.join(output_dir, 'resources')
@@ -868,7 +916,7 @@ def prepare_context_from_files(output_dir):
             with open(filepath, 'r', encoding='utf-8') as f:
                 # Read first 500 characters to get a summary
                 content = f.read(500)
-                file_summaries.append(f"- resources/{filename}: {content[:200]}...")
+                file_summaries[filename] = content
         except Exception as e:
             print(f"Warning: Could not read {filename}: {e}")
 
@@ -913,6 +961,165 @@ def validate_codex_skill_content(skill_content):
     return None
 
 
+RESOURCE_REFERENCE_PATTERN = re.compile(
+    r'(?<![A-Za-z0-9_/.-])((?:resources/)?[A-Za-z0-9_*?.-]+\.md)'
+)
+
+
+def extract_skill_description(skill_content):
+    """Extract the description value from SKILL.md frontmatter."""
+    frontmatter_match = re.match(
+        r'\A---\s*\n(.*?)\n---\s*(?:\n|\Z)',
+        skill_content,
+        re.DOTALL
+    )
+    if not frontmatter_match:
+        return ''
+
+    frontmatter = frontmatter_match.group(1)
+    description_match = re.search(r'^description:\s*(.*)$', frontmatter, re.MULTILINE)
+    if not description_match:
+        return ''
+
+    value = description_match.group(1).strip()
+    if value not in ('|', '>'):
+        return value.strip('"\'')
+
+    description_lines = []
+    remaining_lines = frontmatter[description_match.end():].splitlines()
+    for line in remaining_lines:
+        if line.startswith((' ', '\t')):
+            description_lines.append(line.strip())
+        elif description_lines:
+            break
+
+    return '\n'.join(description_lines)
+
+
+def validate_skill_resource_references(skill_content, md_files):
+    """Return errors for missing, shortened, or undiscoverable resource paths."""
+    allowed_files = set(md_files)
+    exact_resource_references = set()
+    errors = []
+
+    for match in RESOURCE_REFERENCE_PATTERN.finditer(skill_content):
+        reference = match.group(1)
+
+        if reference == 'SKILL.md':
+            continue
+
+        if not reference.startswith('resources/'):
+            is_markdown_link_label = (
+                match.start() > 0
+                and skill_content[match.start() - 1] == '['
+                and skill_content[match.end():].startswith('](resources/')
+            )
+            if not is_markdown_link_label:
+                errors.append(
+                    f"Markdown resource reference must use its full resources/ path: {reference}"
+                )
+            continue
+
+        filename_pattern = reference.removeprefix('resources/')
+        if '*' in filename_pattern or '?' in filename_pattern:
+            errors.append(f"Resource reference must name an exact file, not a pattern: {reference}")
+            continue
+
+        exact_resource_references.add(filename_pattern)
+        if filename_pattern not in allowed_files:
+            errors.append(f"Resource file does not exist: {reference}")
+
+    if not exact_resource_references:
+        errors.append('SKILL.md must name at least one exact resources/<filename>.md path.')
+
+    mcp_files = sorted(filename for filename in md_files if 'mcp' in filename.lower())
+    if mcp_files:
+        frontmatter_match = re.match(
+            r'\A---\s*\n(.*?)\n---\s*(?:\n|\Z)',
+            skill_content,
+            re.DOTALL
+        )
+        body = skill_content[frontmatter_match.end():].lower() if frontmatter_match else ''
+        description = extract_skill_description(skill_content).lower()
+
+        if 'mcp' not in description:
+            errors.append('MCP documentation exists, so the SKILL.md description must include MCP.')
+        if not any(filename in exact_resource_references for filename in mcp_files):
+            allowed_mcp_paths = ', '.join(f'resources/{filename}' for filename in mcp_files)
+            errors.append(
+                f"SKILL.md must name an exact MCP resource path. Available: {allowed_mcp_paths}"
+            )
+        if not re.search(r'\bmcp\s+(?:server\s+)?tools?\b', body):
+            errors.append(
+                'MCP routing must identify available MCP tools as distinct from documentation.'
+            )
+        current_state_terms = ('current state', 'current workspace', 'live state', 'live workspace')
+        if not any(term in body for term in current_state_terms):
+            errors.append(
+                'MCP routing must say that available MCP tools provide current or live service state.'
+            )
+        if not re.search(
+            r'\b(?:operation|operations|action|actions|create|update|write|execute)\b',
+            body
+        ):
+            errors.append(
+                'MCP routing must cover user-requested operations or actions through available MCP tools.'
+            )
+
+    return list(dict.fromkeys(errors))
+
+
+def parse_skill_generation_response(llm_response, extracted_name):
+    """Parse an LLM response into the cleaned name and SKILL.md content."""
+    cleaned_response = llm_response.strip()
+    if cleaned_response.startswith('```'):
+        first_newline = cleaned_response.find('\n')
+        if first_newline != -1:
+            cleaned_response = cleaned_response[first_newline + 1:]
+        if cleaned_response.endswith('```'):
+            cleaned_response = cleaned_response[:-3].rstrip()
+
+    cleaned_response = cleaned_response.replace('\\\n', '')
+
+    try:
+        response_data = json.loads(cleaned_response)
+    except json.JSONDecodeError as error:
+        return extracted_name, llm_response, f'JSON parsing failed: {error}'
+
+    cleaned_name = response_data.get('cleaned_name', extracted_name)
+    skill_content = response_data.get('skill_content', '')
+    if not skill_content:
+        return cleaned_name, skill_content, 'skill_content is empty in the JSON response.'
+
+    return cleaned_name, skill_content, None
+
+
+def collect_skill_validation_errors(skill_type, skill_content, md_files):
+    """Collect structural and resource-routing errors for a generated skill."""
+    errors = []
+    if skill_type == 'codex':
+        codex_error = validate_codex_skill_content(skill_content)
+        if codex_error:
+            errors.append(codex_error)
+
+    errors.extend(validate_skill_resource_references(skill_content, md_files))
+    return errors
+
+
+def build_skill_retry_message(user_message, llm_response, errors):
+    """Add actionable validation feedback for one correction attempt."""
+    error_list = '\n'.join(f'- {error}' for error in errors)
+    return f"""{user_message}
+
+Your previous response failed validation:
+{error_list}
+
+Previous response:
+{llm_response}
+
+Return a corrected JSON response. Use only exact resource paths from the documentation file list above. Every named Markdown file must begin with resources/."""
+
+
 def generate_skill_md(
     extracted_name,
     source_url,
@@ -945,6 +1152,12 @@ def generate_skill_md(
 
     print(f"Found {len(md_files)} documentation files")
 
+    context_files = select_context_files(md_files)
+    context_summaries = [
+        f"- resources/{filename}: {file_summaries.get(filename, '')}..."
+        for filename in context_files
+    ]
+
     # Build user message for LLM
     user_message = f"""Extracted domain name from URL: {extracted_name}
 Source URL: {source_url}
@@ -953,57 +1166,52 @@ Scraped documentation files ({len(md_files)} total) in resources/ subdirectory:
 {chr(10).join(f"- resources/{f}" for f in md_files)}
 
 Sample content from files:
-{chr(10).join(file_summaries[:10])}
+{chr(10).join(context_summaries)}
 
 Please clean the product name (if needed) and create a complete SKILL.md file.
 Remember: All documentation files are in the resources/ subdirectory."""
 
-    # Call LLM
     try:
-        print(f"Calling {config.provider} ({config.model})...")
-        llm_response = call_llm(config, SKILL_GENERATION_PROMPTS[skill_type], user_message)
+        generation_message = user_message
+        cleaned_name = extracted_name
+        skill_content = ''
 
-        # Parse JSON response (strip markdown code fences if present)
-        try:
-            # Remove markdown code fences if present
-            cleaned_response = llm_response.strip()
-            if cleaned_response.startswith('```'):
-                # Find the end of the opening fence (could be ```json or just ```)
-                first_newline = cleaned_response.find('\n')
-                if first_newline != -1:
-                    cleaned_response = cleaned_response[first_newline + 1:]
-                # Remove closing fence
-                if cleaned_response.endswith('```'):
-                    cleaned_response = cleaned_response[:-3].rstrip()
+        for attempt in range(2):
+            retry_label = " correction retry" if attempt else ""
+            print(f"Calling {config.provider} ({config.model}){retry_label}...")
+            llm_response = call_llm(
+                config,
+                SKILL_GENERATION_PROMPTS[skill_type],
+                generation_message
+            )
+            cleaned_name, skill_content, parse_error = parse_skill_generation_response(
+                llm_response,
+                extracted_name
+            )
 
-            # Remove line continuation backslashes that some LLMs add (invalid JSON)
-            # Replace "\ followed by newline" with just the newline
-            cleaned_response = cleaned_response.replace('\\\n', '')
+            validation_errors = []
+            if parse_error:
+                validation_errors.append(parse_error)
+            validation_errors.extend(
+                collect_skill_validation_errors(skill_type, skill_content, md_files)
+            )
 
-            response_data = json.loads(cleaned_response)
-            cleaned_name = response_data.get('cleaned_name', extracted_name)
-            skill_content = response_data.get('skill_content', '')
+            if not validation_errors:
+                break
 
-            if not skill_content:
-                print("Warning: skill_content is empty in JSON response")
-                print(f"Response keys: {list(response_data.keys())}")
+            print("✗ Generated SKILL.md failed validation:")
+            for validation_error in validation_errors:
+                print(f"  - {validation_error}")
 
-        except json.JSONDecodeError as e:
-            print(f"✗ JSON parsing failed: {e}")
-            print(f"First 200 chars of response: {llm_response[:200]}")
-            print("Using extracted name as-is and raw response as content.")
-            cleaned_name = extracted_name
-            skill_content = llm_response
-        except Exception as e:
-            print(f"✗ Unexpected error parsing LLM response: {e}")
-            cleaned_name = extracted_name
-            skill_content = llm_response
-
-        if skill_type == 'codex':
-            validation_error = validate_codex_skill_content(skill_content)
-            if validation_error:
-                print(f"✗ Invalid Codex SKILL.md: {validation_error}")
+            if attempt == 1:
+                print("✗ Correction retry failed. SKILL.md was not saved.")
                 return output_dir
+
+            generation_message = build_skill_retry_message(
+                user_message,
+                llm_response,
+                validation_errors
+            )
 
         # Create final skill name with "use-" prefix
         final_skill_name = f"use-{cleaned_name}"

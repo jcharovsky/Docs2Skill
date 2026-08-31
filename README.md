@@ -48,6 +48,7 @@ Everything stays lowercase with hyphens, following Claude Code skill naming conv
 - 🎯 **Smart domain filtering** - Only scrapes same-domain links by default
 - 🧭 **Multi-source scoping** - Combines repeated starting URLs and filters them with explicit path prefixes
 - 🧹 **Resource cleanup** - Removes fragment duplicates, strips documentation controls, and indexes long Markdown files
+- ✅ **Generated skill validation** - Verifies exact resource paths and retries one invalid LLM response before refusing to save it
 - 📁 **Smart folder naming** - URL parsing + LLM cleanup for playful URLs, with `use-` prefix (e.g., `use-phantombuster`, `use-n8n`)
 - 📄 **Descriptive filenames** - Uses multiple URL path segments for better discoverability (e.g., `api-authentication` not just `authentication`)
 - 📊 **Progress tracking** - Visual progress bar for large scrapes
