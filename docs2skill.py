@@ -712,7 +712,13 @@ def validate_codex_skill_content(skill_content):
     return None
 
 
-def generate_skill_md(extracted_name, source_url, output_dir, skill_type):
+def generate_skill_md(
+    extracted_name,
+    source_url,
+    output_dir,
+    skill_type,
+    show_deploy_instructions=False
+):
     """Generate a target-specific SKILL.md file using an LLM."""
     print("\n" + "="*60)
     print("Generating SKILL.md file...")
@@ -829,16 +835,17 @@ Remember: All documentation files are in the resources/ subdirectory."""
         print(f"✅ Skill created successfully!")
         print(f"{'='*60}")
         print(f"\nLocation: {os.path.abspath(output_dir)}")
-        if skill_type == 'claude':
-            print(f"\nDeploy to Claude platforms:")
-            print(f"  • Claude Code:      cp -r {output_dir} ~/.claude/skills/")
-            print(f"  • Claude.ai/Desktop: ZIP and upload via Settings > Features")
-            print(f"  • Agent SDK:        cp -r {output_dir} <project>/.claude/skills/")
-            print(f"  • Claude API:       Upload via /v1/skills endpoint")
-        else:
-            print(f"\nDeploy to Codex:")
-            print(f"  • Personal skill:   cp -r {output_dir} ~/.codex/skills/")
-        print(f"\nSee README.md 'Deploying Generated Skills' section for full instructions")
+        if show_deploy_instructions:
+            if skill_type == 'claude':
+                print(f"\nDeploy to Claude platforms:")
+                print(f"  • Claude Code:      cp -r {output_dir} ~/.claude/skills/")
+                print(f"  • Claude.ai/Desktop: ZIP and upload via Settings > Features")
+                print(f"  • Agent SDK:        cp -r {output_dir} <project>/.claude/skills/")
+                print(f"  • Claude API:       Upload via /v1/skills endpoint")
+            else:
+                print(f"\nDeploy to Codex:")
+                print(f"  • Personal skill:   cp -r {output_dir} ~/.codex/skills/")
+            print(f"\nSee README.md 'Deploying Generated Skills' section for full instructions")
         return output_dir  # Return potentially renamed directory
 
     except Exception as e:
@@ -852,7 +859,13 @@ def main():
     parser = argparse.ArgumentParser(
         description='Scrape HTML content and convert to Markdown from all sub-URLs'
     )
-    parser.add_argument('--url', required=True, help='The URL to scrape content from')
+    parser.add_argument(
+        '--url',
+        required=True,
+        action='append',
+        dest='urls',
+        help='A starting URL to scrape. Repeat this option to combine multiple documentation sections.'
+    )
     parser.add_argument(
         '--type',
         required=True,
@@ -869,24 +882,36 @@ def main():
         action='store_true',
         help='Scrape URLs from all domains (default: same domain only)'
     )
+    parser.add_argument(
+        '--include-path',
+        action='append',
+        default=[],
+        help='Only scrape URL paths with this prefix. Repeat this option to allow multiple sections.'
+    )
 
     args = parser.parse_args()
 
     # Load credentials only for an actual run, never while importing this module.
     load_dotenv()
 
+    custom_output = args.output is not None
+
     # Set output inside the selected target's personal skills directory if not specified.
     # This directory will be renamed later to "use-{cleaned_name}" by the LLM.
     if args.output is None:
-        extracted_name = get_domain_name(args.url)
+        extracted_name = get_domain_name(args.urls[0])
         print(f"Extracted domain name: {extracted_name}")
         args.output = get_default_output_dir(args.type, extracted_name)
 
     # Create output directory
     os.makedirs(args.output, exist_ok=True)
 
-    print(f"Fetching links from: {args.url}")
-    links = get_all_links(args.url)
+    links = set()
+    for source_url in args.urls:
+        print(f"Fetching links from: {source_url}")
+        source_links = get_all_links(source_url)
+        print(f"Found {len(source_links)} links from this starting URL")
+        links.update(source_links)
 
     if not links:
         print("No links found!")
@@ -894,9 +919,20 @@ def main():
 
     # Filter by domain (default behavior, unless --all-domains is specified)
     if not args.all_domains:
-        base_domain = urlparse(args.url).netloc
-        links = {link for link in links if urlparse(link).netloc == base_domain}
-        print(f"Filtering to same domain only: {base_domain}")
+        base_domains = {urlparse(source_url).netloc for source_url in args.urls}
+        links = {link for link in links if urlparse(link).netloc in base_domains}
+        print(f"Filtering to starting domains only: {', '.join(sorted(base_domains))}")
+
+    if args.include_path:
+        include_paths = tuple(
+            path if path.startswith('/') else f'/{path}'
+            for path in args.include_path
+        )
+        links = {
+            link for link in links
+            if urlparse(link).path.startswith(include_paths)
+        }
+        print(f"Filtering to path prefixes: {', '.join(include_paths)}")
 
     print(f"\nFound {len(links)} links to scrape")
     print(f"Saving to: {args.output}/\n")
@@ -918,8 +954,15 @@ def main():
     # Generate SKILL.md file
     if successful > 0:
         # Extract domain name for LLM to clean
-        extracted_name = get_domain_name(args.url)
-        final_output_dir = generate_skill_md(extracted_name, args.url, args.output, args.type)
+        extracted_name = get_domain_name(args.urls[0])
+        source_description = '\n'.join(args.urls)
+        final_output_dir = generate_skill_md(
+            extracted_name,
+            source_description,
+            args.output,
+            args.type,
+            show_deploy_instructions=custom_output
+        )
         # Update args.output in case the directory was renamed
         args.output = final_output_dir
 

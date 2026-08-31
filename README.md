@@ -150,6 +150,20 @@ By default, the generated skill folder is created in the current user's personal
 
 ### Advanced Options
 
+**Combine multiple documentation sections into one skill**:
+```bash
+uv run docs2skill.py \
+  --url https://docs.example.com/user-guide/ \
+  --url https://docs.example.com/api/ \
+  --include-path /user-guide/ \
+  --include-path /api/ \
+  --type codex
+```
+
+Pass `--url` multiple times to combine and deduplicate the links before scraping. The script groups all collected resources and generates one `SKILL.md`.
+
+Pass `--include-path` multiple times to restrict collection to selected path prefixes. This removes global navigation links to unrelated documentation sections.
+
 **Scrape all domains** (including external links):
 ```bash
 uv run docs2skill.py --url https://docs.example.com --type claude --all-domains
