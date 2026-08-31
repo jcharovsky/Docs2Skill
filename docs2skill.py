@@ -4,6 +4,7 @@ Markdown Scraper - Scrapes HTML content and converts to Markdown from all sub-UR
 """
 
 import argparse
+from fnmatch import fnmatch
 import json
 import os
 import re
@@ -149,7 +150,7 @@ You MUST respond with a JSON object containing two fields:
    - Provides clear instructions for Claude on how to use the documentation in resources/
    - Includes relevant examples
    - Uses forward slashes for all file paths (e.g., resources/guide.md)
-   - Uses only exact resource paths from the supplied file list. Every named Markdown file starts with `resources/`.
+   - Uses complete resource paths from the supplied file list. Exact file references start with `resources/`. Search patterns may use matching `resources/...*.md` globs.
    - When MCP documentation is present, includes MCP in the description, names its exact resource path, and distinguishes documentation from live tools for current state and requested operations.
    - Follows all best practices above
 
@@ -173,7 +174,7 @@ Your task is to create a complete, Codex-compatible SKILL.md file that enables C
 7. Include two or three brief example user requests. Do not include Claude Code, Claude.ai, Anthropic, or deployment instructions.
 8. Tell Codex to search filenames and contents with `rg`, consult generated contents sections, and read narrow ranges instead of loading large resources in full.
 9. Include distinct documented interfaces such as APIs, SDKs, CLIs, or MCP servers in the description and routing when they appear in the filenames or sample content.
-10. Use resource paths exactly as provided. Every named Markdown file must use its complete `resources/<filename>.md` path. Do not shorten or invent filenames.
+10. Use complete resource paths. Exact file references must use `resources/<filename>.md`. Search patterns may use matching `resources/...*.md` globs. Never use bare, shortened, or invented filenames.
 11. When MCP documentation is present, include MCP in the description, link its exact resource path, and distinguish documentation from live MCP tools. Documentation explains behavior. Available MCP tools provide current service state and perform user-requested operations.
 
 ## Source material
@@ -964,6 +965,11 @@ def validate_codex_skill_content(skill_content):
 RESOURCE_REFERENCE_PATTERN = re.compile(
     r'(?<![A-Za-z0-9_/.-])((?:resources/)?[A-Za-z0-9_*?.-]+\.md)'
 )
+MCP_TOOL_PATTERN = re.compile(r'\bmcp\s+(?:server\s+)?tools?\b')
+MCP_CURRENT_STATE_TERMS = ('current state', 'current workspace', 'live state', 'live workspace')
+MCP_OPERATION_PATTERN = re.compile(
+    r'\b(?:operation|operations|action|actions|create|update|write|execute)\b'
+)
 
 
 def extract_skill_description(skill_content):
@@ -996,6 +1002,34 @@ def extract_skill_description(skill_content):
     return '\n'.join(description_lines)
 
 
+def ensure_mcp_routing(skill_content, md_files):
+    """Add deterministic MCP routing when the generated instructions omit it."""
+    mcp_files = sorted(filename for filename in md_files if 'mcp' in filename.lower())
+    if not mcp_files:
+        return skill_content
+
+    frontmatter_match = re.match(
+        r'\A---\s*\n(.*?)\n---\s*(?:\n|\Z)',
+        skill_content,
+        re.DOTALL
+    )
+    body = skill_content[frontmatter_match.end():].lower() if frontmatter_match else ''
+    mcp_path = f'resources/{mcp_files[0]}'
+    has_complete_routing = (
+        mcp_path.lower() in body
+        and MCP_TOOL_PATTERN.search(body)
+        and any(term in body for term in MCP_CURRENT_STATE_TERMS)
+        and MCP_OPERATION_PATTERN.search(body)
+    )
+    if has_complete_routing:
+        return skill_content
+
+    routing_section = f'''## MCP documentation and live tools
+
+Read `{mcp_path}` for documented MCP capabilities and setup. Treat documentation as static reference material. When available, use live MCP tools for current state and user-requested operations such as create, update, write, or execute.'''
+    return f'{skill_content.rstrip()}\n\n{routing_section}\n'
+
+
 def validate_skill_resource_references(skill_content, md_files):
     """Return errors for missing, shortened, or undiscoverable resource paths."""
     allowed_files = set(md_files)
@@ -1022,7 +1056,8 @@ def validate_skill_resource_references(skill_content, md_files):
 
         filename_pattern = reference.removeprefix('resources/')
         if '*' in filename_pattern or '?' in filename_pattern:
-            errors.append(f"Resource reference must name an exact file, not a pattern: {reference}")
+            if not any(fnmatch(filename, filename_pattern) for filename in allowed_files):
+                errors.append(f"Resource pattern matches no files: {reference}")
             continue
 
         exact_resource_references.add(filename_pattern)
@@ -1049,19 +1084,15 @@ def validate_skill_resource_references(skill_content, md_files):
             errors.append(
                 f"SKILL.md must name an exact MCP resource path. Available: {allowed_mcp_paths}"
             )
-        if not re.search(r'\bmcp\s+(?:server\s+)?tools?\b', body):
+        if not MCP_TOOL_PATTERN.search(body):
             errors.append(
                 'MCP routing must identify available MCP tools as distinct from documentation.'
             )
-        current_state_terms = ('current state', 'current workspace', 'live state', 'live workspace')
-        if not any(term in body for term in current_state_terms):
+        if not any(term in body for term in MCP_CURRENT_STATE_TERMS):
             errors.append(
                 'MCP routing must say that available MCP tools provide current or live service state.'
             )
-        if not re.search(
-            r'\b(?:operation|operations|action|actions|create|update|write|execute)\b',
-            body
-        ):
+        if not MCP_OPERATION_PATTERN.search(body):
             errors.append(
                 'MCP routing must cover user-requested operations or actions through available MCP tools.'
             )
@@ -1106,9 +1137,18 @@ def collect_skill_validation_errors(skill_type, skill_content, md_files):
     return errors
 
 
-def build_skill_retry_message(user_message, llm_response, errors):
+def build_skill_retry_message(user_message, llm_response, errors, md_files):
     """Add actionable validation feedback for one correction attempt."""
     error_list = '\n'.join(f'- {error}' for error in errors)
+    mcp_files = sorted(filename for filename in md_files if 'mcp' in filename.lower())
+    mcp_correction = ''
+    if mcp_files:
+        mcp_path = f'resources/{mcp_files[0]}'
+        mcp_correction = f'''
+
+Include MCP in the frontmatter description. Use this routing guidance in SKILL.md:
+"Read `{mcp_path}` for documented MCP capabilities and setup. Treat documentation as static reference material. When available, use live MCP tools for current state and user-requested operations such as create, update, write, or execute."'''
+
     return f"""{user_message}
 
 Your previous response failed validation:
@@ -1116,8 +1156,9 @@ Your previous response failed validation:
 
 Previous response:
 {llm_response}
+{mcp_correction}
 
-Return a corrected JSON response. Use only exact resource paths from the documentation file list above. Every named Markdown file must begin with resources/."""
+Return a corrected JSON response. Exact Markdown file references must use their complete resources/<filename>.md paths. Search patterns must begin with resources/ and match the supplied file list. Never use a bare Markdown filename or pattern."""
 
 
 def generate_skill_md(
@@ -1188,6 +1229,8 @@ Remember: All documentation files are in the resources/ subdirectory."""
                 llm_response,
                 extracted_name
             )
+            if not parse_error:
+                skill_content = ensure_mcp_routing(skill_content, md_files)
 
             validation_errors = []
             if parse_error:
@@ -1210,7 +1253,8 @@ Remember: All documentation files are in the resources/ subdirectory."""
             generation_message = build_skill_retry_message(
                 user_message,
                 llm_response,
-                validation_errors
+                validation_errors,
+                md_files
             )
 
         # Create final skill name with "use-" prefix

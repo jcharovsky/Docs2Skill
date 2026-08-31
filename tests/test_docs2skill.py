@@ -203,7 +203,7 @@ Read mcp_server.md for current workspace state and requested operations.
         self.assertTrue(any('exact MCP resource path' in error for error in errors))
         self.assertTrue(any('available MCP tools' in error for error in errors))
 
-    def test_resource_validation_rejects_wildcard_paths(self):
+    def test_resource_validation_allows_matching_full_path_patterns(self):
         skill_content = '''---
 name: use-example
 description: Example API documentation.
@@ -217,7 +217,23 @@ Search resources/docs-api-*.md, then read resources/docs-api-home.md.
             ['docs-api-home.md']
         )
 
-        self.assertTrue(any('not a pattern' in error for error in errors))
+        self.assertEqual(errors, [])
+
+    def test_resource_validation_rejects_nonmatching_full_path_patterns(self):
+        skill_content = '''---
+name: use-example
+description: Example API documentation.
+---
+
+Search resources/docs-sdk-*.md, then read resources/docs-api-home.md.
+'''
+
+        errors = validate_skill_resource_references(
+            skill_content,
+            ['docs-api-home.md']
+        )
+
+        self.assertTrue(any('matches no files' in error for error in errors))
 
     def test_generate_skill_retries_invalid_resource_references(self):
         invalid_skill = '''---
@@ -268,6 +284,50 @@ Read [the MCP reference](resources/docs-developer_guide-mcp_server.md) for behav
             self.assertEqual(generated_skill.read_text(), valid_skill)
             self.assertIn('failed validation', retry_message)
             self.assertIn('resources/docs-developer_guide-mcp_server.md', retry_message)
+            self.assertIn('Treat documentation as static reference material.', retry_message)
+            self.assertIn('use live MCP tools for current state', retry_message)
+            self.assertIn('user-requested operations', retry_message)
+
+    def test_generate_skill_completes_mcp_routing_before_validation(self):
+        incomplete_skill = '''---
+name: use-braze
+description: Braze API and MCP documentation.
+---
+
+Search resources/docs-api-*.md and read resources/docs-developer_guide-mcp_server.md for MCP setup.
+'''
+        response = json.dumps({
+            'cleaned_name': 'braze',
+            'skill_content': incomplete_skill,
+        })
+        config = Mock(provider='openai', model='test-model')
+        config.validate.return_value = True
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_directory = Path(temporary_directory) / 'braze'
+            resources = output_directory / 'resources'
+            resources.mkdir(parents=True)
+            (resources / 'docs-api-home.md').write_text('# API')
+            (resources / 'docs-developer_guide-mcp_server.md').write_text('# MCP')
+
+            with patch('docs2skill.LLMConfig', return_value=config), patch(
+                'docs2skill.call_llm',
+                side_effect=[response, response]
+            ) as mock_call_llm:
+                result = generate_skill_md(
+                    'braze',
+                    'https://example.com/docs',
+                    str(output_directory),
+                    'codex'
+                )
+
+            generated_skill = Path(result) / 'SKILL.md'
+            generated_content = generated_skill.read_text()
+
+            self.assertEqual(mock_call_llm.call_count, 1)
+            self.assertIn('Treat documentation as static reference material.', generated_content)
+            self.assertIn('use live MCP tools for current state', generated_content)
+            self.assertIn('user-requested operations', generated_content)
 
     def test_generate_skill_stops_after_failed_correction(self):
         invalid_skill = '''---
