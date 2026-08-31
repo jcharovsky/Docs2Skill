@@ -370,6 +370,54 @@ Search resources/docs-api-*.md and read resources/docs-developer_guide-mcp_serve
             self.assertIn('use live MCP tools for current state', generated_content)
             self.assertIn('user-requested operations', generated_content)
 
+    def test_generate_skill_prioritizes_focus_relevant_mcp_tools(self):
+        incomplete_skill = '''---
+name: use-braze
+description: Braze MCP campaign guidance.
+---
+
+Read resources/docs-developer_guide-mcp_server.md for MCP setup.
+'''
+        response = json.dumps({
+            'cleaned_name': 'braze',
+            'skill_content': incomplete_skill,
+        })
+        config = Mock(provider='openai', model='test-model')
+        config.validate.return_value = True
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_directory = Path(temporary_directory) / 'braze'
+            resources = output_directory / 'resources'
+            resources.mkdir(parents=True)
+            (resources / 'docs-developer_guide-mcp_server.md').write_text('''# MCP
+
+## Available tools
+
+Tool | Access | Description
+---|---|---
+`create_campaign` | create | Create a campaign.
+`launch_campaign` | create | Launch a campaign.
+`create_catalog` | create | Create a catalog.
+''')
+
+            with patch('docs2skill.LLMConfig', return_value=config), patch(
+                'docs2skill.call_llm',
+                return_value=response
+            ):
+                result = generate_skill_md(
+                    'braze',
+                    'https://example.com/docs',
+                    str(output_directory),
+                    'codex',
+                    focus='creating and launching Braze campaigns'
+                )
+
+            generated_content = (Path(result) / 'SKILL.md').read_text()
+
+        self.assertIn('`create_campaign`', generated_content)
+        self.assertIn('`launch_campaign`', generated_content)
+        self.assertNotIn('`create_catalog`', generated_content)
+
     def test_generate_skill_stops_after_failed_correction(self):
         invalid_skill = '''---
 name: use-braze
@@ -468,7 +516,7 @@ description: Braze API and MCP guidance for documented operations.
 
 Read resources/docs-developer_guide-mcp_server.md. Use available MCP tools for current state and user-requested operations.
 
-## Examples
+Examples of user requests this skill can handle:
 
 - "Use the MCP server for batch user updates."
 '''

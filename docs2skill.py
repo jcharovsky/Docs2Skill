@@ -1081,7 +1081,7 @@ MCP_OPERATION_PATTERN = re.compile(
     r'\b(?:operation|operations|action|actions|create|update|write|execute)\b'
 )
 EXAMPLES_SECTION_PATTERN = re.compile(
-    r'(?im)^(?:#{1,6}\s+)?examples?(?:\s+(?:of\s+)?user\s+requests|\s+interactions|\s+requests)?\s*:?\s*$'
+    r'(?im)^(?:(?:#{1,6}\s+)examples?\b[^\n]*|examples?\b[^\n]*:)\s*$'
 )
 
 
@@ -1179,7 +1179,58 @@ def validate_mcp_examples(skill_content, mcp_capabilities):
     return list(dict.fromkeys(errors))
 
 
-def ensure_mcp_routing(skill_content, md_files, mcp_capabilities=None):
+def score_mcp_capability_focus(tool_name, description, focus_terms):
+    """Score an MCP capability by its lexical overlap with the focus."""
+    tool_terms = re.findall(r'[a-z0-9]{3,}', tool_name.lower())
+    description_terms = re.findall(r'[a-z0-9]{3,}', description.lower())
+
+    def matches_focus(term):
+        return any(
+            term == focus_term
+            or (
+                min(len(term), len(focus_term)) >= 4
+                and (term in focus_term or focus_term in term)
+            )
+            for focus_term in focus_terms
+        )
+
+    return (
+        sum(10 for term in tool_terms if matches_focus(term))
+        + sum(1 for term in description_terms if matches_focus(term))
+    )
+
+
+def select_mcp_example_tools(mcp_capabilities, focus=None, limit=8):
+    """Select deterministic MCP examples, preferring focus-relevant tools."""
+    tool_names = sorted(mcp_capabilities)
+    focus_terms = get_focus_terms(focus)
+    if not focus_terms:
+        return tool_names[:limit]
+
+    ranked_tools = sorted(
+        tool_names,
+        key=lambda tool_name: (
+            -score_mcp_capability_focus(
+                tool_name,
+                mcp_capabilities[tool_name],
+                focus_terms
+            ),
+            tool_name
+        )
+    )
+    focused_tools = [
+        tool_name
+        for tool_name in ranked_tools
+        if score_mcp_capability_focus(
+            tool_name,
+            mcp_capabilities[tool_name],
+            focus_terms
+        ) > 0
+    ]
+    return focused_tools[:limit] if focused_tools else tool_names[:limit]
+
+
+def ensure_mcp_routing(skill_content, md_files, mcp_capabilities=None, focus=None):
     """Add deterministic MCP routing when the generated instructions omit it."""
     mcp_files = sorted(filename for filename in md_files if 'mcp' in filename.lower())
     if not mcp_files:
@@ -1210,7 +1261,8 @@ def ensure_mcp_routing(skill_content, md_files, mcp_capabilities=None):
     documented_tools = ''
     if mcp_capabilities:
         example_tools = ', '.join(
-            f'`{tool}`' for tool in sorted(mcp_capabilities)[:8]
+            f'`{tool}`'
+            for tool in select_mcp_example_tools(mcp_capabilities, focus)
         )
         documented_tools = (
             f' Documented examples include {example_tools}. '
@@ -1476,7 +1528,8 @@ Remember: All documentation files are in the resources/ subdirectory."""
                 skill_content = ensure_mcp_routing(
                     skill_content,
                     md_files,
-                    mcp_capabilities
+                    mcp_capabilities,
+                    focus
                 )
 
             validation_errors = []
