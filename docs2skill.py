@@ -1364,6 +1364,7 @@ def main():
         print(f"Fetching links from: {source_url}")
         source_links = get_all_links(source_url)
         print(f"Found {len(source_links)} links from this starting URL")
+        links.add(normalize_url(source_url))
         links.update(source_links)
 
     if not links:

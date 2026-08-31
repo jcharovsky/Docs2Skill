@@ -9,6 +9,7 @@ from docs2skill import (
     convert_html_to_markdown,
     generate_skill_md,
     get_all_links,
+    main,
     normalize_url,
     postprocess_resource_files,
     remove_markdown_chrome,
@@ -37,6 +38,32 @@ class Docs2SkillTests(unittest.TestCase):
         links = get_all_links('https://example.com/docs/')
 
         self.assertEqual(links, {'https://example.com/docs/page'})
+
+    def test_main_scrapes_a_starting_url_without_discovered_links(self):
+        source_url = 'https://example.com/docs/compliance_documentation/#overview'
+        expected_url = 'https://example.com/docs/compliance_documentation/'
+
+        with tempfile.TemporaryDirectory() as temporary_directory, patch(
+            'sys.argv',
+            [
+                'docs2skill.py',
+                '--url', source_url,
+                '--include-path', '/docs/compliance_documentation/',
+                '--type', 'codex',
+                '--output', temporary_directory,
+            ]
+        ), patch('docs2skill.load_dotenv'), patch(
+            'docs2skill.get_all_links',
+            return_value=set()
+        ), patch('docs2skill.scrape_url', return_value=True) as mock_scrape, patch(
+            'docs2skill.group_and_merge_files'
+        ), patch('docs2skill.postprocess_resource_files'), patch(
+            'docs2skill.generate_skill_md',
+            return_value=temporary_directory
+        ):
+            main()
+
+        mock_scrape.assert_called_once_with(expected_url, temporary_directory)
 
     def test_convert_html_to_markdown_removes_documentation_chrome(self):
         markdown = convert_html_to_markdown(b'''

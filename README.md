@@ -163,7 +163,7 @@ uv run docs2skill.py \
   --type codex
 ```
 
-Pass `--url` multiple times to combine and deduplicate the links before scraping. The script groups all collected resources and generates one `SKILL.md`.
+Pass `--url` multiple times to scrape each starting page, then combine and deduplicate their discovered links. The script groups all collected resources and generates one `SKILL.md`.
 
 Pass `--include-path` multiple times to restrict collection to selected path prefixes. This removes global navigation links to unrelated documentation sections.
 
