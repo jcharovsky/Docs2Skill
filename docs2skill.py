@@ -9,7 +9,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse
 
 import html2text
 import requests
@@ -95,7 +95,7 @@ Note: Only `name` and `description` are allowed. Do NOT include `version`, `depe
    - Explain how to search/use the supporting markdown files in the resources/ subdirectory
    - Include best practices for answering user questions
    - Mention that Claude should search and read relevant .md files from resources/ to find accurate information
-   - For any resource file over 100 lines, include a table of contents at the top
+   - Resource files over 100 lines include a generated contents section. Tell Claude to use it and search before reading narrow ranges.
    - Use progressive disclosure: keep SKILL.md as overview, detailed content goes in resources/
    - **IMPORTANT**: Keep file references one level deep - all files should link directly from SKILL.md, not from other resource files
    - **IMPORTANT**: Avoid time-sensitive information (no dates, version cutoffs). Use "Old patterns" sections for deprecated approaches instead
@@ -169,6 +169,8 @@ Your task is to create a complete, Codex-compatible SKILL.md file that enables C
 5. Use progressive disclosure. Keep detailed documentation in `resources/`, and reference files directly from SKILL.md with forward-slash paths.
 6. Give a clear default when multiple approaches exist, use consistent terminology, and distinguish deprecated patterns when the documentation does.
 7. Include two or three brief example user requests. Do not include Claude Code, Claude.ai, Anthropic, or deployment instructions.
+8. Tell Codex to search filenames and contents with `rg`, consult generated contents sections, and read narrow ranges instead of loading large resources in full.
+9. Include distinct documented interfaces such as APIs, SDKs, CLIs, or MCP servers in the description and routing when they appear in the filenames or sample content.
 
 ## Source material
 
@@ -309,6 +311,11 @@ def call_gemini(config, system_prompt, user_message):
     return result['candidates'][0]['content']['parts'][0]['text']
 
 
+def normalize_url(url):
+    """Remove fragments that do not affect the HTTP resource."""
+    return urldefrag(url).url
+
+
 def get_all_links(url):
     """Extract all links from a webpage"""
     try:
@@ -319,7 +326,7 @@ def get_all_links(url):
         links = set()
         for link in soup.find_all('a', href=True):
             absolute_url = urljoin(url, link['href'])
-            links.add(absolute_url)
+            links.add(normalize_url(absolute_url))
 
         return links
     except Exception as e:
@@ -411,6 +418,26 @@ def get_filename_from_url(url):
     return filename or 'page'
 
 
+MARKDOWN_CHROME_PATTERNS = (
+    re.compile(r'Skip to content'),
+    re.compile(r'!\[\]\([^)]*sidebar-rail-collapse\.svg\) Press Arrow down .+'),
+    re.compile(r'Press `Esc` to close the menu'),
+    re.compile(r'\[ BRAZE SYSTEM STATUS Checking Braze Status \]\(https://braze\.statuspage\.io/?\)'),
+    re.compile(r'__ Copy for LLM __ View as Markdown __ Build with an LLM'),
+    re.compile(r'New Stuff!'),
+    re.compile(r'__ Back to top'),
+)
+
+
+def remove_markdown_chrome(markdown):
+    """Remove known documentation controls left by HTML-to-Markdown conversion."""
+    lines = [
+        line for line in markdown.splitlines()
+        if not any(pattern.fullmatch(line.strip()) for pattern in MARKDOWN_CHROME_PATTERNS)
+    ]
+    return '\n'.join(lines).strip()
+
+
 def convert_html_to_markdown(html_content):
     """Convert HTML content to Markdown format"""
     # Parse HTML
@@ -419,6 +446,19 @@ def convert_html_to_markdown(html_content):
     # Remove unwanted elements
     for element in soup(['script', 'style', 'nav', 'footer', 'header', 'iframe', 'noscript']):
         element.decompose()
+
+    # Remove common documentation controls that sit outside semantic HTML tags.
+    chrome_selectors = (
+        '.skip-main',
+        '.sr-only',
+        '[role="navigation"]',
+        '#nav_bar',
+        '.copy-for-llm-page-header',
+        '#cc_prompt',
+    )
+    for selector in chrome_selectors:
+        for element in soup.select(selector):
+            element.decompose()
 
     # Get the cleaned HTML
     cleaned_html = str(soup)
@@ -432,7 +472,7 @@ def convert_html_to_markdown(html_content):
     h.single_line_break = False
 
     # Convert to markdown
-    markdown = h.handle(cleaned_html)
+    markdown = remove_markdown_chrome(h.handle(cleaned_html))
 
     return markdown.strip()
 
@@ -440,6 +480,7 @@ def convert_html_to_markdown(html_content):
 def scrape_url(url, output_dir):
     """Scrape HTML content and convert to Markdown"""
     try:
+        url = normalize_url(url)
         response = requests.get(url, timeout=10)
         response.raise_for_status()
 
@@ -640,6 +681,166 @@ def group_and_merge_files(output_dir):
     print(f"  Files after: {files_after}")
     print(f"  Files merged: {merged_count}")
     print(f"  Reduction: {files_before - files_after} files")
+
+
+MERGED_SECTION_PATTERN = re.compile(
+    r'^##\s+(.+?)\n\n\*\*Source:\*\*\s+(https?://\S+)\s*$',
+    re.MULTILINE
+)
+CONTENTS_START = '<!-- docs2skill-contents:start -->'
+CONTENTS_END = '<!-- docs2skill-contents:end -->'
+
+
+def deduplicate_merged_sections(content):
+    """Remove repeated merged sections that resolve to the same URL."""
+    matches = list(MERGED_SECTION_PATTERN.finditer(content))
+    if len(matches) < 2:
+        return content
+
+    prefix = content[:matches[0].start()].rstrip()
+    sections = []
+    seen_urls = set()
+    seen_bodies = set()
+
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
+        section = content[match.start():end].strip()
+        section = re.sub(r'\n+---\s*$', '', section).rstrip()
+        source_url = normalize_url(match.group(2))
+        body_start = match.end() - match.start()
+        section_body = section[body_start:].strip()
+
+        if source_url in seen_urls or section_body in seen_bodies:
+            continue
+
+        seen_urls.add(source_url)
+        seen_bodies.add(section_body)
+        section = re.sub(
+            r'(\*\*Source:\*\*\s+)https?://\S+',
+            lambda source_match: f'{source_match.group(1)}{source_url}',
+            section,
+            count=1
+        )
+        sections.append(section)
+
+    return f"{prefix}\n\n" + "\n\n---\n\n".join(sections) + "\n"
+
+
+def remove_generated_contents_section(content):
+    """Remove a generated contents section so it can be rebuilt."""
+    marked_pattern = re.compile(
+        rf'\n*{re.escape(CONTENTS_START)}.*?{re.escape(CONTENTS_END)}\n*',
+        re.DOTALL
+    )
+    if marked_pattern.search(content):
+        return marked_pattern.sub('\n\n', content, count=1).strip() + '\n'
+
+    legacy_match = re.search(r'^## Contents\s*$', content, re.MULTILINE)
+    if not legacy_match or legacy_match.start() > 2000:
+        return content
+
+    next_wrapper = MERGED_SECTION_PATTERN.search(content, legacy_match.end())
+    next_heading = re.search(
+        r'^#{1,6}\s+.+$',
+        content[legacy_match.end():],
+        re.MULTILINE
+    )
+    next_heading_start = (
+        legacy_match.end() + next_heading.start()
+        if next_heading else None
+    )
+    candidates = [
+        position for position in (
+            next_wrapper.start() if next_wrapper else None,
+            next_heading_start,
+        )
+        if position is not None
+    ]
+    if not candidates:
+        return content
+
+    end = min(candidates)
+    return f"{content[:legacy_match.start()].rstrip()}\n\n{content[end:].lstrip()}"
+
+
+def add_contents_section(content, minimum_lines=100):
+    """Add a compact contents index to a long resource file."""
+    content = remove_generated_contents_section(content)
+    lines = content.splitlines()
+    if len(lines) <= minimum_lines:
+        return content
+
+    merged_entries = [
+        (match.group(1).strip(), normalize_url(match.group(2)))
+        for match in MERGED_SECTION_PATTERN.finditer(content)
+    ]
+
+    if merged_entries:
+        entries = [f'- {title}: {source_url}' for title, source_url in merged_entries]
+    else:
+        headings = [
+            match.group(1).strip()
+            for match in re.finditer(r'^##\s+(.+?)\s*$', content, re.MULTILINE)
+            if match.group(1).strip().lower() != 'contents'
+        ]
+        if not headings:
+            return content
+        entries = [f'- {heading}' for heading in headings]
+
+    contents_block = (
+        f"{CONTENTS_START}\n"
+        "## Contents\n\n"
+        + "\n".join(entries)
+        + f"\n{CONTENTS_END}"
+    )
+
+    separator_index = next(
+        (index for index, line in enumerate(lines[:10]) if line.strip() == '---'),
+        None
+    )
+    insert_at = separator_index + 1 if separator_index is not None else 1
+    updated_lines = lines[:insert_at] + ['', contents_block, ''] + lines[insert_at:]
+    return '\n'.join(updated_lines).strip() + '\n'
+
+
+def postprocess_resource_files(output_dir):
+    """Deduplicate merged sections and index long Markdown resources."""
+    resources_dir = os.path.join(output_dir, 'resources')
+    if not os.path.exists(resources_dir):
+        return {'files_updated': 0, 'duplicates_removed': 0, 'contents_added': 0}
+
+    stats = {'files_updated': 0, 'duplicates_removed': 0, 'contents_added': 0}
+
+    for filename in sorted(os.listdir(resources_dir)):
+        if not filename.endswith('.md'):
+            continue
+
+        filepath = os.path.join(resources_dir, filename)
+        with open(filepath, 'r', encoding='utf-8') as file:
+            original = file.read()
+
+        source_count_before = len(MERGED_SECTION_PATTERN.findall(original))
+        had_contents = bool(re.search(r'^## Contents\s*$', original, re.MULTILINE))
+        updated = remove_markdown_chrome(original) + '\n'
+        updated = deduplicate_merged_sections(updated)
+        source_count_after = len(MERGED_SECTION_PATTERN.findall(updated))
+        updated = add_contents_section(updated)
+        has_contents = bool(re.search(r'^## Contents\s*$', updated, re.MULTILINE))
+
+        stats['duplicates_removed'] += source_count_before - source_count_after
+        if not had_contents and has_contents:
+            stats['contents_added'] += 1
+
+        if updated != original:
+            with open(filepath, 'w', encoding='utf-8') as file:
+                file.write(updated)
+            stats['files_updated'] += 1
+
+    print("\nResource post-processing complete:")
+    print(f"  Files updated: {stats['files_updated']}")
+    print(f"  Duplicate sections removed: {stats['duplicates_removed']}")
+    print(f"  Contents sections added: {stats['contents_added']}")
+    return stats
 
 
 def prepare_context_from_files(output_dir):
@@ -950,6 +1151,7 @@ def main():
     # Group and merge files based on URL path depth
     if successful > 0:
         group_and_merge_files(args.output)
+        postprocess_resource_files(args.output)
 
     # Generate SKILL.md file
     if successful > 0:
