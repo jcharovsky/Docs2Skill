@@ -133,7 +133,7 @@ LLM_MODEL=claude-3-5-sonnet-20241022
 ### Basic Usage
 
 ```bash
-uv run docs2skill.py https://docs.example.com
+uv run docs2skill.py --url https://docs.example.com
 ```
 
 This will:
@@ -150,18 +150,18 @@ The skill folder is created as a sibling to Docs2Skill, keeping the tool directo
 
 **Scrape all domains** (including external links):
 ```bash
-uv run docs2skill.py https://docs.example.com --all-domains
+uv run docs2skill.py --url https://docs.example.com --all-domains
 ```
 
 **Custom output folder**:
 ```bash
-uv run docs2skill.py https://docs.example.com -o my_custom_folder
+uv run docs2skill.py --url https://docs.example.com -o my_custom_folder
 ```
 
 **Skip LLM generation** (just scrape docs):
 ```bash
 # Simply don't configure .env - script will skip SKILL.md generation
-uv run docs2skill.py https://docs.example.com
+uv run docs2skill.py --url https://docs.example.com
 ```
 
 ## Output Structure
@@ -364,7 +364,7 @@ The script may be processing - give it a moment. For very small sites, the progr
 ### Scrape Phantombuster Documentation
 ```bash
 cd Docs2Skill
-uv run docs2skill.py https://hub.phantombuster.com/reference
+uv run docs2skill.py --url https://hub.phantombuster.com/reference
 ```
 
 Output: `../use-phantombuster/` folder with SKILL.md + resources/ containing all API docs
@@ -372,7 +372,7 @@ Output: `../use-phantombuster/` folder with SKILL.md + resources/ containing all
 ### Scrape Brightdata Docs
 ```bash
 cd Docs2Skill
-uv run docs2skill.py https://docs.brightdata.com
+uv run docs2skill.py --url https://docs.brightdata.com
 ```
 
 Output: `../use-brightdata/` folder with SKILL.md + resources/ containing all docs
@@ -380,7 +380,7 @@ Output: `../use-brightdata/` folder with SKILL.md + resources/ containing all do
 ### Scrape n8n Documentation
 ```bash
 cd Docs2Skill
-uv run docs2skill.py https://docs.n8n.io
+uv run docs2skill.py --url https://docs.n8n.io
 ```
 
 Output: `../use-n8n/` folder with SKILL.md + resources/ containing all docs
@@ -388,7 +388,7 @@ Output: `../use-n8n/` folder with SKILL.md + resources/ containing all docs
 ### Scrape from Playful URL
 ```bash
 cd Docs2Skill
-uv run docs2skill.py https://www.getsuperapp.io/docs
+uv run docs2skill.py --url https://www.getsuperapp.io/docs
 ```
 
 Output: `../use-superapp/` folder (automatically cleaned from "getsuperapp")

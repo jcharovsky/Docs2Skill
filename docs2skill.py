@@ -763,7 +763,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Scrape HTML content and convert to Markdown from all sub-URLs'
     )
-    parser.add_argument('url', help='The URL to scrape content from')
+    parser.add_argument('--url', required=True, help='The URL to scrape content from')
     parser.add_argument(
         '-o', '--output',
         default=None,
