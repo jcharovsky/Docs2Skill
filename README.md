@@ -148,7 +148,7 @@ The command:
 5. Create final skill folder with `use-` prefix in the selected personal skills directory
 6. Generate a target-specific `SKILL.md` file using your configured LLM
 
-By default, the generated skill folder is created in the current user's personal skills directory: `~/.claude/skills/` for Claude or `~/.codex/skills/` for Codex.
+By default, the generated skill folder is created in the current user's personal skills directory: `~/.claude/skills/` for Claude or `~/.agents/skills/` for Codex.
 
 `--type` is required. Use `claude` for a Claude Code skill or `codex` for a Codex-compatible skill. Both targets preserve the same `resources/` Markdown files.
 
@@ -201,7 +201,7 @@ After generating a Claude skill, you'll get:
 
 ```
 
-For Codex, the generated skill follows the equivalent path: `~/.codex/skills/use-phantombuster/`.
+For Codex, the generated skill follows the equivalent path: `~/.agents/skills/use-phantombuster/`.
 parent/
 ├── Docs2Skill/                       # Tool directory (stays clean)
 │   ├── docs2skill.py
@@ -231,7 +231,7 @@ Generate the Codex format and install it as a personal skill:
 
 ```bash
 uv run docs2skill.py --url https://docs.example.com --type codex
-cp -r ../use-example ~/.codex/skills/
+cp -r ../use-example ~/.agents/skills/
 ```
 
 The resulting `SKILL.md` uses Codex-compatible frontmatter and references the same `resources/` Markdown files as the Claude target.

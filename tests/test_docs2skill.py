@@ -8,6 +8,7 @@ from docs2skill import (
     add_contents_section,
     convert_html_to_markdown,
     generate_skill_md,
+    get_default_output_dir,
     get_all_links,
     main,
     normalize_url,
@@ -19,6 +20,14 @@ from docs2skill import (
 
 
 class Docs2SkillTests(unittest.TestCase):
+    def test_codex_default_output_uses_personal_agents_skills_directory(self):
+        output_directory = Path(get_default_output_dir('codex', 'example'))
+
+        self.assertEqual(
+            output_directory.parts[-3:],
+            ('.agents', 'skills', 'example')
+        )
+
     def test_normalize_url_removes_fragments(self):
         self.assertEqual(
             normalize_url('https://example.com/docs/page?tab=web#setup'),

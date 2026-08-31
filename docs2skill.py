@@ -367,7 +367,8 @@ def get_domain_name(url):
 
 def get_default_output_dir(skill_type, extracted_name):
     """Return the target's personal skills directory for the current user."""
-    return str(Path.home() / f'.{skill_type}' / 'skills' / extracted_name)
+    skills_directory = '.agents' if skill_type == 'codex' else '.claude'
+    return str(Path.home() / skills_directory / 'skills' / extracted_name)
 
 
 def get_filename_from_url(url):
@@ -1549,7 +1550,7 @@ Remember: All documentation files are in the resources/ subdirectory."""
                 print(f"  • Claude API:       Upload via /v1/skills endpoint")
             else:
                 print(f"\nDeploy to Codex:")
-                print(f"  • Personal skill:   cp -r {output_dir} ~/.codex/skills/")
+                print(f"  • Personal skill:   cp -r {output_dir} ~/.agents/skills/")
             print(f"\nSee README.md 'Deploying Generated Skills' section for full instructions")
         return output_dir  # Return potentially renamed directory
 
