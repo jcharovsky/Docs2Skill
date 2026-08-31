@@ -47,8 +47,9 @@ Everything stays lowercase with hyphens, following Claude Code skill naming conv
 - 🌐 **Universal LLM support** - Works with Anthropic Claude, OpenAI GPT, Google Gemini, xAI Grok, OpenRouter, and local models via Ollama (Mistral, DeepSeek, Qwen, Llama, and more)
 - 🎯 **Smart domain filtering** - Only scrapes same-domain links by default
 - 🧭 **Multi-source scoping** - Combines repeated starting URLs and filters them with explicit path prefixes
+- 🔎 **Intent-focused generation** - Prioritizes documented resources and MCP tools for a supplied use case
 - 🧹 **Resource cleanup** - Removes fragment duplicates, strips documentation controls, and indexes long Markdown files
-- ✅ **Generated skill validation** - Verifies complete resource paths, matching search patterns, and retries one invalid LLM response before refusing to save it
+- ✅ **Generated skill validation** - Verifies resource paths, concise descriptions, and grounded MCP examples, then retries one invalid LLM response before refusing to save it
 - 📁 **Smart folder naming** - URL parsing + LLM cleanup for playful URLs, with `use-` prefix (e.g., `use-phantombuster`, `use-n8n`)
 - 📄 **Descriptive filenames** - Uses multiple URL path segments for better discoverability (e.g., `api-authentication` not just `authentication`)
 - 📊 **Progress tracking** - Visual progress bar for large scrapes
@@ -139,7 +140,7 @@ LLM_MODEL=claude-3-5-sonnet-20241022
 uv run docs2skill.py --url https://docs.example.com --type claude
 ```
 
-This will:
+The command:
 1. Extract the domain name from the URL
 2. Scrape all pages from the same domain
 3. Convert HTML to Markdown and save to a temporary folder
@@ -167,6 +168,17 @@ Pass `--url` multiple times to scrape each starting page, then combine and dedup
 
 Pass `--include-path` multiple times to restrict collection to selected path prefixes. This removes global navigation links to unrelated documentation sections.
 
+**Prioritize a documented use case in the generated skill**:
+```bash
+uv run docs2skill.py \
+  --url https://docs.example.com/user-guide/ \
+  --url https://docs.example.com/api/ \
+  --focus "campaign creation" \
+  --type codex
+```
+
+The focus ranks matching resource excerpts first and guides the generated routing and examples. It does not expand the scraped documentation scope.
+
 **Scrape all domains** (including external links):
 ```bash
 uv run docs2skill.py --url https://docs.example.com --type claude --all-domains
@@ -179,7 +191,7 @@ uv run docs2skill.py --url https://docs.example.com --type claude -o my_custom_f
 
 **Skip LLM generation** (just scrape docs):
 ```bash
-# Simply don't configure .env - script will skip SKILL.md generation
+# Without LLM configuration, the script skips SKILL.md generation
 uv run docs2skill.py --url https://docs.example.com --type claude
 ```
 
@@ -346,7 +358,7 @@ Docs2Skill implements best practices from the official Claude Code documentation
 Generated skills follow all official requirements:
 
 - **Name validation**: Lowercase only, max 64 characters, no reserved words ("anthropic", "claude"), no XML tags
-- **Description format**: Max 1024 characters, written in third person, includes specific trigger terms, no XML tags
+- **Description format**: Max 300 characters in one concise sentence, with the product and trigger terms first
 - **500-line body limit**: Keeps SKILL.md under 500 lines for optimal performance
 - **Progressive disclosure**: Main content in SKILL.md, detailed content in resources/
 - **One-level-deep references**: All resource files link directly from SKILL.md (no nested chains)

@@ -49,6 +49,7 @@ class Docs2SkillTests(unittest.TestCase):
                 'docs2skill.py',
                 '--url', source_url,
                 '--include-path', '/docs/compliance_documentation/',
+                '--focus', 'campaign creation',
                 '--type', 'codex',
                 '--output', temporary_directory,
             ]
@@ -60,10 +61,14 @@ class Docs2SkillTests(unittest.TestCase):
         ), patch('docs2skill.postprocess_resource_files'), patch(
             'docs2skill.generate_skill_md',
             return_value=temporary_directory
-        ):
+        ) as mock_generate_skill:
             main()
 
         mock_scrape.assert_called_once_with(expected_url, temporary_directory)
+        self.assertEqual(
+            mock_generate_skill.call_args.kwargs['focus'],
+            'campaign creation'
+        )
 
     def test_convert_html_to_markdown_removes_documentation_chrome(self):
         markdown = convert_html_to_markdown(b'''
@@ -391,6 +396,193 @@ Read mcp_server.md.
             self.assertEqual(mock_call_llm.call_count, 2)
             self.assertEqual(result, str(output_directory))
             self.assertFalse((output_directory / 'SKILL.md').exists())
+
+    def test_generate_skill_exposes_mcp_capabilities_beyond_file_prefix(self):
+        skill_content = '''---
+name: use-braze
+description: Braze API and MCP guidance for documented campaign operations.
+---
+
+Read resources/docs-developer_guide-mcp_server.md. Use available MCP tools for current state and user-requested operations.
+
+## Examples
+
+- "Create a campaign with MCP tool `create_campaign`."
+'''
+        response = json.dumps({
+            'cleaned_name': 'braze',
+            'skill_content': skill_content,
+        })
+        config = Mock(provider='openai', model='test-model')
+        config.validate.return_value = True
+        preamble = 'Introductory material. ' * 40
+        mcp_documentation = f'''# MCP
+
+{preamble}
+
+## Available tools
+
+Tool | Access | Description
+---|---|---
+`create_campaign` | create | Create a campaign.
+'''
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_directory = Path(temporary_directory) / 'braze'
+            resources = output_directory / 'resources'
+            resources.mkdir(parents=True)
+            (resources / 'docs-developer_guide-mcp_server.md').write_text(
+                mcp_documentation
+            )
+
+            with patch('docs2skill.LLMConfig', return_value=config), patch(
+                'docs2skill.call_llm',
+                return_value=response
+            ) as mock_call_llm:
+                generate_skill_md(
+                    'braze',
+                    'https://example.com/docs',
+                    str(output_directory),
+                    'codex'
+                )
+
+            generation_message = mock_call_llm.call_args.args[2]
+
+        self.assertIn('Documented MCP tools:', generation_message)
+        self.assertIn('create_campaign', generation_message)
+
+    def test_generate_skill_rejects_unsupported_mcp_example(self):
+        unsupported_skill = '''---
+name: use-braze
+description: Braze API and MCP guidance for documented operations.
+---
+
+Read resources/docs-developer_guide-mcp_server.md. Use available MCP tools for current state and user-requested operations.
+
+## Examples
+
+- "Use the MCP server for batch user updates."
+'''
+        response = json.dumps({
+            'cleaned_name': 'braze',
+            'skill_content': unsupported_skill,
+        })
+        config = Mock(provider='openai', model='test-model')
+        config.validate.return_value = True
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_directory = Path(temporary_directory) / 'braze'
+            resources = output_directory / 'resources'
+            resources.mkdir(parents=True)
+            (resources / 'docs-developer_guide-mcp_server.md').write_text('''# MCP
+
+## Available tools
+
+Tool | Access | Description
+---|---|---
+`create_campaign` | create | Create a campaign.
+''')
+
+            with patch('docs2skill.LLMConfig', return_value=config), patch(
+                'docs2skill.call_llm',
+                side_effect=[response, response]
+            ) as mock_call_llm:
+                result = generate_skill_md(
+                    'braze',
+                    'https://example.com/docs',
+                    str(output_directory),
+                    'codex'
+                )
+
+            retry_message = mock_call_llm.call_args_list[1].args[2]
+
+            self.assertEqual(mock_call_llm.call_count, 2)
+            self.assertEqual(result, str(output_directory))
+            self.assertFalse((output_directory / 'SKILL.md').exists())
+            self.assertIn('create_campaign', retry_message)
+
+    def test_generate_skill_rejects_overlong_description(self):
+        overlong_skill = f'''---
+name: use-example
+description: {'A' * 301}
+---
+
+Read resources/docs-api-home.md before answering.
+'''
+        response = json.dumps({
+            'cleaned_name': 'example',
+            'skill_content': overlong_skill,
+        })
+        config = Mock(provider='openai', model='test-model')
+        config.validate.return_value = True
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_directory = Path(temporary_directory) / 'example'
+            resources = output_directory / 'resources'
+            resources.mkdir(parents=True)
+            (resources / 'docs-api-home.md').write_text('# API')
+
+            with patch('docs2skill.LLMConfig', return_value=config), patch(
+                'docs2skill.call_llm',
+                side_effect=[response, response]
+            ) as mock_call_llm:
+                result = generate_skill_md(
+                    'example',
+                    'https://example.com/docs',
+                    str(output_directory),
+                    'codex'
+                )
+
+            self.assertEqual(mock_call_llm.call_count, 2)
+            self.assertEqual(result, str(output_directory))
+            self.assertFalse((output_directory / 'SKILL.md').exists())
+
+    def test_generate_skill_includes_and_prioritizes_focus(self):
+        skill_content = '''---
+name: use-example
+description: Example campaign documentation for creating customer messages.
+---
+
+Read resources/docs-user_guide-campaigns.md before answering.
+'''
+        response = json.dumps({
+            'cleaned_name': 'example',
+            'skill_content': skill_content,
+        })
+        config = Mock(provider='openai', model='test-model')
+        config.validate.return_value = True
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_directory = Path(temporary_directory) / 'example'
+            resources = output_directory / 'resources'
+            resources.mkdir(parents=True)
+            (resources / 'docs-api-authentication.md').write_text('# Authentication')
+            (resources / 'docs-user_guide-campaigns.md').write_text(
+                '# Campaigns\n\nCreate and launch a campaign.'
+            )
+
+            with patch('docs2skill.LLMConfig', return_value=config), patch(
+                'docs2skill.call_llm',
+                return_value=response
+            ) as mock_call_llm:
+                generate_skill_md(
+                    'example',
+                    'https://example.com/docs',
+                    str(output_directory),
+                    'codex',
+                    focus='campaign creation'
+                )
+
+            generation_message = mock_call_llm.call_args.args[2]
+            campaign_index = generation_message.index(
+                '- resources/docs-user_guide-campaigns.md:'
+            )
+            authentication_index = generation_message.index(
+                '- resources/docs-api-authentication.md:'
+            )
+
+        self.assertIn('Generation focus: campaign creation', generation_message)
+        self.assertLess(campaign_index, authentication_index)
 
 
 if __name__ == '__main__':

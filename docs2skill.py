@@ -64,7 +64,7 @@ Your task is to create a SKILL.md file that enables Claude to effectively use th
 name: skill-name-here
 description: |
   Brief description of what this skill does and when Claude should use it.
-  Must be specific and include trigger terms. Max 1024 characters.
+  One concise sentence that front-loads the product and trigger terms. Max 300 characters.
 ---
 ```
 
@@ -79,8 +79,8 @@ Note: Only `name` and `description` are allowed. Do NOT include `version`, `depe
    - **CRITICAL**: Cannot contain XML tags
 
 3. **Description Requirements** (CRITICAL):
-   - Maximum 1024 characters
-   - Write in third person (e.g., "Processes files" not "I can help you")
+   - Maximum 300 characters
+   - Use one concise sentence that front-loads the product and key use cases
    - Explain BOTH what the skill does AND when to use it
    - Include specific trigger terms (product names, API names, service names)
    - Be concrete, not generic
@@ -107,6 +107,8 @@ Note: Only `name` and `description` are allowed. Do NOT include `version`, `depe
    - Provide 2-3 example interactions
    - Show what kinds of questions users might ask
    - Demonstrate how Claude should respond
+   - Ground every example in the supplied documentation
+   - An MCP example must name at least one exact tool from the documented MCP tool inventory
 
 6. **Key Principles**:
    - Focus on ONE specific capability/service
@@ -166,16 +168,17 @@ Your task is to create a complete, Codex-compatible SKILL.md file that enables C
 1. Begin the file with YAML frontmatter delimited by `---` lines.
 2. Include these required frontmatter fields:
    - `name`: lowercase letters, numbers, and hyphens only, at most 64 characters.
-   - `description`: a concrete third-person description that says what the skill does and when to use it. Include product and API trigger terms. Keep it at most 1024 characters.
+   - `description`: one concise sentence that front-loads the product, key use cases, and trigger terms. Keep it at most 300 characters.
 3. Name the skill `use-{cleaned_name}`.
 4. Keep the body concise and actionable. It must explain how Codex should identify and read relevant Markdown files in `resources/` before answering.
 5. Use progressive disclosure. Keep detailed documentation in `resources/`, and reference files directly from SKILL.md with forward-slash paths.
 6. Give a clear default when multiple approaches exist, use consistent terminology, and distinguish deprecated patterns when the documentation does.
-7. Include two or three brief example user requests. Do not include Claude Code, Claude.ai, Anthropic, or deployment instructions.
+7. Include two or three brief example user requests. Ground every example in the supplied documentation. An MCP example must name at least one exact tool from the documented MCP tool inventory. When no inventory is supplied, use examples from other documented interfaces. Do not include Claude Code, Claude.ai, Anthropic, or deployment instructions.
 8. Tell Codex to search filenames and contents with `rg`, consult generated contents sections, and read narrow ranges instead of loading large resources in full.
 9. Include distinct documented interfaces such as APIs, SDKs, CLIs, or MCP servers in the description and routing when they appear in the filenames or sample content.
 10. Use complete resource paths. Exact file references must use `resources/<filename>.md`. Search patterns may use matching `resources/...*.md` globs. Never use bare, shortened, or invented filenames.
 11. When MCP documentation is present, include MCP in the description, link its exact resource path, and distinguish documentation from live MCP tools. Documentation explains behavior. Available MCP tools provide current service state and perform user-requested operations.
+12. When a generation focus is supplied, prioritize matching resources and capabilities in routing and examples. Include the focus only when the supplied documentation supports it.
 
 ## Source material
 
@@ -869,11 +872,65 @@ CONTEXT_FILE_MARKERS = (
     'developer_guide',
     'user_guide',
 )
+MAX_SKILL_DESCRIPTION_CHARS = 300
+CONTEXT_PREFIX_CHARS = 500
+CONTEXT_EXCERPT_CHARS = 2500
+MCP_TABLE_TOOL_PATTERN = re.compile(
+    r'^`([A-Za-z][A-Za-z0-9_.:-]*)`\*?$'
+)
+FOCUS_TERM_PATTERN = re.compile(r'[A-Za-z0-9_]{3,}')
 
 
-def select_context_files(md_files, limit=20):
+def get_focus_terms(focus):
+    """Return stable search terms from an optional generation focus."""
+    if not focus:
+        return []
+    return list(dict.fromkeys(
+        match.group(0).lower()
+        for match in FOCUS_TERM_PATTERN.finditer(focus)
+    ))
+
+
+def score_focus_match(filename, summary, focus_terms):
+    """Score a resource by filename and excerpt matches for the focus."""
+    filename_lower = filename.lower()
+    summary_lower = summary.lower()
+    return sum(
+        filename_lower.count(term) * 10 + summary_lower.count(term)
+        for term in focus_terms
+    )
+
+
+def select_context_files(md_files, limit=20, file_summaries=None, focus=None):
     """Select representative resources across documented interfaces."""
     selected = []
+    file_summaries = file_summaries or {}
+    focus_terms = get_focus_terms(focus)
+
+    if focus_terms:
+        ranked_files = sorted(
+            md_files,
+            key=lambda filename: (
+                -score_focus_match(
+                    filename,
+                    file_summaries.get(filename, ''),
+                    focus_terms
+                ),
+                filename
+            )
+        )
+        for filename in ranked_files:
+            if score_focus_match(
+                filename,
+                file_summaries.get(filename, ''),
+                focus_terms
+            ) == 0:
+                break
+            selected.append(filename)
+            if len(selected) == min(limit, 5):
+                if len(selected) == limit:
+                    return selected
+                break
 
     for marker in CONTEXT_FILE_MARKERS:
         matches = sorted(filename for filename in md_files if marker in filename.lower())
@@ -892,16 +949,64 @@ def select_context_files(md_files, limit=20):
     return selected
 
 
-def prepare_context_from_files(output_dir):
+def extract_mcp_capabilities(markdown):
+    """Extract documented MCP tool names and descriptions from Markdown tables."""
+    capabilities = {}
+
+    for line in markdown.splitlines():
+        cells = [cell.strip() for cell in line.strip().split('|')]
+        if len(cells) < 2:
+            continue
+
+        tool_match = MCP_TABLE_TOOL_PATTERN.fullmatch(cells[0])
+        if not tool_match:
+            continue
+
+        tool_name = tool_match.group(1)
+        description = re.sub(r'\s+', ' ', cells[-1]).strip()
+        capabilities[tool_name] = description
+
+    return capabilities
+
+
+def build_context_excerpt(content, focus=None):
+    """Build a compact excerpt with headings and focus-matching passages."""
+    parts = [content[:CONTEXT_PREFIX_CHARS].strip()]
+    focus_terms = get_focus_terms(focus)
+    focus_passages = []
+    for term in focus_terms:
+        for match in re.finditer(re.escape(term), content, re.IGNORECASE):
+            start = max(0, match.start() - 180)
+            end = min(len(content), match.end() + 420)
+            passage = content[start:end].strip()
+            if passage and passage not in focus_passages:
+                focus_passages.append(passage)
+            if len(focus_passages) == 3:
+                break
+        if len(focus_passages) == 3:
+            break
+
+    if focus_passages:
+        parts.append('Focus matches:\n' + '\n...\n'.join(focus_passages))
+
+    headings = re.findall(r'^#{1,3}\s+.+$', content, re.MULTILINE)
+    if headings:
+        parts.append('Headings:\n' + '\n'.join(headings[:30]))
+
+    return '\n\n'.join(part for part in parts if part)[:CONTEXT_EXCERPT_CHARS]
+
+
+def prepare_context_from_files(output_dir, focus=None):
     """Read scraped markdown files and prepare context for LLM"""
     md_files = []
     file_summaries = {}
+    mcp_capabilities = {}
 
     # Get all .md files from resources subdirectory
     resources_dir = os.path.join(output_dir, 'resources')
 
     if not os.path.exists(resources_dir):
-        return md_files, file_summaries
+        return md_files, file_summaries, mcp_capabilities
 
     for filename in os.listdir(resources_dir):
         if filename.endswith('.md'):
@@ -910,18 +1015,19 @@ def prepare_context_from_files(output_dir):
     # Sort for consistent ordering
     md_files.sort()
 
-    # Read first few lines of each file to get a sense of content
+    # Build compact excerpts and inspect complete MCP resources for tool tables.
     for filename in md_files:
         filepath = os.path.join(resources_dir, filename)
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                # Read first 500 characters to get a summary
-                content = f.read(500)
-                file_summaries[filename] = content
+                content = f.read()
+                file_summaries[filename] = build_context_excerpt(content, focus)
+                if 'mcp' in filename.lower():
+                    mcp_capabilities.update(extract_mcp_capabilities(content))
         except Exception as e:
             print(f"Warning: Could not read {filename}: {e}")
 
-    return md_files, file_summaries
+    return md_files, file_summaries, mcp_capabilities
 
 
 def validate_codex_skill_content(skill_content):
@@ -950,8 +1056,11 @@ def validate_codex_skill_content(skill_content):
         description = '\n'.join(description_lines)
     else:
         description = description_match.group(0).split(':', 1)[1].strip()
-    if not description or len(description) > 1024:
-        return 'SKILL.md description must be between 1 and 1024 characters.'
+    if not description or len(description) > MAX_SKILL_DESCRIPTION_CHARS:
+        return (
+            'SKILL.md description must be between 1 and '
+            f'{MAX_SKILL_DESCRIPTION_CHARS} characters.'
+        )
 
     body = skill_content[frontmatter_match.end():].strip()
     if not body:
@@ -969,6 +1078,9 @@ MCP_TOOL_PATTERN = re.compile(r'\bmcp\s+(?:server\s+)?tools?\b')
 MCP_CURRENT_STATE_TERMS = ('current state', 'current workspace', 'live state', 'live workspace')
 MCP_OPERATION_PATTERN = re.compile(
     r'\b(?:operation|operations|action|actions|create|update|write|execute)\b'
+)
+EXAMPLES_SECTION_PATTERN = re.compile(
+    r'(?im)^(?:#{1,6}\s+)?examples?(?:\s+(?:of\s+)?user\s+requests|\s+interactions|\s+requests)?\s*:?\s*$'
 )
 
 
@@ -1002,11 +1114,77 @@ def extract_skill_description(skill_content):
     return '\n'.join(description_lines)
 
 
-def ensure_mcp_routing(skill_content, md_files):
+def validate_skill_description(skill_content):
+    """Return an error when the discovery description is not concise."""
+    description = extract_skill_description(skill_content)
+    if not description:
+        return 'SKILL.md frontmatter must include a description.'
+    if len(description) > MAX_SKILL_DESCRIPTION_CHARS:
+        return (
+            'SKILL.md description must be at most '
+            f'{MAX_SKILL_DESCRIPTION_CHARS} characters.'
+        )
+    return None
+
+
+def extract_examples_section(skill_content):
+    """Return the Markdown examples section when one is present."""
+    section_match = EXAMPLES_SECTION_PATTERN.search(skill_content)
+    if not section_match:
+        return ''
+
+    section_start = section_match.end()
+    next_heading = re.search(
+        r'^#{1,6}\s+.+$',
+        skill_content[section_start:],
+        re.MULTILINE
+    )
+    section_end = (
+        section_start + next_heading.start()
+        if next_heading
+        else len(skill_content)
+    )
+    return skill_content[section_start:section_end]
+
+
+def validate_mcp_examples(skill_content, mcp_capabilities):
+    """Require MCP examples to cite at least one documented tool."""
+    examples_section = extract_examples_section(skill_content)
+    if not examples_section:
+        return []
+
+    example_blocks = re.split(
+        r'(?m)(?=^\s*(?:[-*+]\s+|\d+[.)]\s+))',
+        examples_section
+    )
+    example_blocks = [block.strip() for block in example_blocks if block.strip()]
+    errors = []
+    known_tools = set(mcp_capabilities)
+    for example in example_blocks:
+        if 'mcp' not in example.lower():
+            continue
+        if not any(
+            re.search(
+                rf'(?<![A-Za-z0-9_]){re.escape(tool)}(?![A-Za-z0-9_])',
+                example
+            )
+            for tool in known_tools
+        ):
+            errors.append(
+                'Every MCP example must name at least one exact tool from the '
+                'documented MCP tool inventory.'
+            )
+
+    return list(dict.fromkeys(errors))
+
+
+def ensure_mcp_routing(skill_content, md_files, mcp_capabilities=None):
     """Add deterministic MCP routing when the generated instructions omit it."""
     mcp_files = sorted(filename for filename in md_files if 'mcp' in filename.lower())
     if not mcp_files:
         return skill_content
+
+    mcp_capabilities = mcp_capabilities or {}
 
     frontmatter_match = re.match(
         r'\A---\s*\n(.*?)\n---\s*(?:\n|\Z)',
@@ -1020,13 +1198,27 @@ def ensure_mcp_routing(skill_content, md_files):
         and MCP_TOOL_PATTERN.search(body)
         and any(term in body for term in MCP_CURRENT_STATE_TERMS)
         and MCP_OPERATION_PATTERN.search(body)
+        and (
+            not mcp_capabilities
+            or any(tool.lower() in body for tool in mcp_capabilities)
+        )
     )
     if has_complete_routing:
         return skill_content
 
+    documented_tools = ''
+    if mcp_capabilities:
+        example_tools = ', '.join(
+            f'`{tool}`' for tool in sorted(mcp_capabilities)[:8]
+        )
+        documented_tools = (
+            f' Documented examples include {example_tools}. '
+            'Use only tools named in the MCP reference.'
+        )
+
     routing_section = f'''## MCP documentation and live tools
 
-Read `{mcp_path}` for documented MCP capabilities and setup. Treat documentation as static reference material. When available, use live MCP tools for current state and user-requested operations such as create, update, write, or execute.'''
+Read `{mcp_path}` for documented MCP capabilities and setup. Treat documentation as static reference material. When available, use live MCP tools for current state and user-requested operations.{documented_tools}'''
     return f'{skill_content.rstrip()}\n\n{routing_section}\n'
 
 
@@ -1125,29 +1317,54 @@ def parse_skill_generation_response(llm_response, extracted_name):
     return cleaned_name, skill_content, None
 
 
-def collect_skill_validation_errors(skill_type, skill_content, md_files):
+def collect_skill_validation_errors(
+    skill_type,
+    skill_content,
+    md_files,
+    mcp_capabilities=None
+):
     """Collect structural and resource-routing errors for a generated skill."""
     errors = []
+    mcp_capabilities = mcp_capabilities or {}
     if skill_type == 'codex':
         codex_error = validate_codex_skill_content(skill_content)
         if codex_error:
             errors.append(codex_error)
 
+    if skill_type != 'codex':
+        description_error = validate_skill_description(skill_content)
+        if description_error:
+            errors.append(description_error)
     errors.extend(validate_skill_resource_references(skill_content, md_files))
-    return errors
+    errors.extend(validate_mcp_examples(skill_content, mcp_capabilities))
+    return list(dict.fromkeys(errors))
 
 
-def build_skill_retry_message(user_message, llm_response, errors, md_files):
+def build_skill_retry_message(
+    user_message,
+    llm_response,
+    errors,
+    md_files,
+    mcp_capabilities=None
+):
     """Add actionable validation feedback for one correction attempt."""
     error_list = '\n'.join(f'- {error}' for error in errors)
+    mcp_capabilities = mcp_capabilities or {}
     mcp_files = sorted(filename for filename in md_files if 'mcp' in filename.lower())
     mcp_correction = ''
     if mcp_files:
         mcp_path = f'resources/{mcp_files[0]}'
+        capability_correction = ''
+        if mcp_capabilities:
+            capability_correction = (
+                '\nDocumented MCP tools: '
+                + ', '.join(f'`{tool}`' for tool in sorted(mcp_capabilities))
+                + '. Every MCP example must name at least one of these exact tools.'
+            )
         mcp_correction = f'''
 
 Include MCP in the frontmatter description. Use this routing guidance in SKILL.md:
-"Read `{mcp_path}` for documented MCP capabilities and setup. Treat documentation as static reference material. When available, use live MCP tools for current state and user-requested operations such as create, update, write, or execute."'''
+"Read `{mcp_path}` for documented MCP capabilities and setup. Treat documentation as static reference material. When available, use live MCP tools for current state and user-requested operations."{capability_correction}'''
 
     return f"""{user_message}
 
@@ -1166,7 +1383,8 @@ def generate_skill_md(
     source_url,
     output_dir,
     skill_type,
-    show_deploy_instructions=False
+    show_deploy_instructions=False,
+    focus=None
 ):
     """Generate a target-specific SKILL.md file using an LLM."""
     print("\n" + "="*60)
@@ -1185,7 +1403,10 @@ def generate_skill_md(
         return output_dir  # Return original directory
 
     # Prepare context from scraped files
-    md_files, file_summaries = prepare_context_from_files(output_dir)
+    md_files, file_summaries, mcp_capabilities = prepare_context_from_files(
+        output_dir,
+        focus
+    )
 
     if not md_files:
         print("✗ No markdown files found to create skill from")
@@ -1193,17 +1414,38 @@ def generate_skill_md(
 
     print(f"Found {len(md_files)} documentation files")
 
-    context_files = select_context_files(md_files)
+    context_files = select_context_files(
+        md_files,
+        file_summaries=file_summaries,
+        focus=focus
+    )
     context_summaries = [
-        f"- resources/{filename}: {file_summaries.get(filename, '')}..."
+        f"- resources/{filename}: {file_summaries.get(filename, '')}"
         for filename in context_files
     ]
+    focus_context = ''
+    if focus:
+        focus_context = f'''Generation focus: {focus}
+Prioritize this focus in routing and examples when the documentation supports it.
+
+'''
+    mcp_context = ''
+    if mcp_capabilities:
+        mcp_context = '''Documented MCP tools:
+{}
+
+Every MCP example must name at least one exact tool from this inventory.
+
+'''.format('\n'.join(
+            f'- `{tool}`: {description}'
+            for tool, description in sorted(mcp_capabilities.items())
+        ))
 
     # Build user message for LLM
     user_message = f"""Extracted domain name from URL: {extracted_name}
 Source URL: {source_url}
 
-Scraped documentation files ({len(md_files)} total) in resources/ subdirectory:
+{focus_context}{mcp_context}Scraped documentation files ({len(md_files)} total) in resources/ subdirectory:
 {chr(10).join(f"- resources/{f}" for f in md_files)}
 
 Sample content from files:
@@ -1230,13 +1472,22 @@ Remember: All documentation files are in the resources/ subdirectory."""
                 extracted_name
             )
             if not parse_error:
-                skill_content = ensure_mcp_routing(skill_content, md_files)
+                skill_content = ensure_mcp_routing(
+                    skill_content,
+                    md_files,
+                    mcp_capabilities
+                )
 
             validation_errors = []
             if parse_error:
                 validation_errors.append(parse_error)
             validation_errors.extend(
-                collect_skill_validation_errors(skill_type, skill_content, md_files)
+                collect_skill_validation_errors(
+                    skill_type,
+                    skill_content,
+                    md_files,
+                    mcp_capabilities
+                )
             )
 
             if not validation_errors:
@@ -1254,7 +1505,8 @@ Remember: All documentation files are in the resources/ subdirectory."""
                 user_message,
                 llm_response,
                 validation_errors,
-                md_files
+                md_files,
+                mcp_capabilities
             )
 
         # Create final skill name with "use-" prefix
@@ -1341,6 +1593,11 @@ def main():
         default=[],
         help='Only scrape URL paths with this prefix. Repeat this option to allow multiple sections.'
     )
+    parser.add_argument(
+        '--focus',
+        default=None,
+        help='Prioritize a documented use case in generated routing and examples.'
+    )
 
     args = parser.parse_args()
 
@@ -1416,7 +1673,8 @@ def main():
             source_description,
             args.output,
             args.type,
-            show_deploy_instructions=custom_output
+            show_deploy_instructions=custom_output,
+            focus=args.focus
         )
         # Update args.output in case the directory was renamed
         args.output = final_output_dir
