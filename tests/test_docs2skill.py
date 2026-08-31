@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from docs2skill import (
     add_contents_section,
+    call_openai_compatible,
     convert_html_to_markdown,
     generate_skill_md,
     get_default_output_dir,
@@ -20,6 +21,31 @@ from docs2skill import (
 
 
 class Docs2SkillTests(unittest.TestCase):
+    @patch('docs2skill.requests.post')
+    def test_openai_compatible_omits_optional_generation_parameters(
+        self,
+        mock_post
+    ):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            'choices': [{'message': {'content': 'generated skill'}}]
+        }
+        mock_post.return_value = response
+        config = Mock(
+            provider='openai',
+            api_key='test-key',
+            model='gpt-5.6-sol',
+            endpoint='https://api.openai.com/v1/chat/completions'
+        )
+
+        result = call_openai_compatible(config, 'system prompt', 'user prompt')
+
+        payload = mock_post.call_args.kwargs['json']
+        self.assertEqual(result, 'generated skill')
+        self.assertNotIn('max_tokens', payload)
+        self.assertNotIn('temperature', payload)
+
     def test_codex_default_output_uses_personal_agents_skills_directory(self):
         output_directory = Path(get_default_output_dir('codex', 'example'))
 

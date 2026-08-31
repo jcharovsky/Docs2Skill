@@ -259,8 +259,6 @@ def call_openai_compatible(config, system_prompt, user_message):
 
     payload = {
         'model': config.model,
-        'max_tokens': 4096,
-        'temperature': 0.7,
         'messages': [
             {
                 'role': 'system',
