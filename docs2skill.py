@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import html2text
@@ -347,6 +348,11 @@ def get_domain_name(url):
         domain_name = parts[0]
 
     return domain_name.lower()
+
+
+def get_default_output_dir(skill_type, extracted_name):
+    """Return the target's personal skills directory for the current user."""
+    return str(Path.home() / f'.{skill_type}' / 'skills' / extracted_name)
 
 
 def get_filename_from_url(url):
@@ -856,7 +862,7 @@ def main():
     parser.add_argument(
         '-o', '--output',
         default=None,
-        help='Output directory for markdown files (default: ../{domain})'
+        help='Output directory for the generated skill (default: the selected target personal skills directory)'
     )
     parser.add_argument(
         '--all-domains',
@@ -869,12 +875,12 @@ def main():
     # Load credentials only for an actual run, never while importing this module.
     load_dotenv()
 
-    # Set output directory to ../{extracted_name} (parent directory) if not specified
-    # This will be renamed later to "use-{cleaned_name}" by the LLM
+    # Set output inside the selected target's personal skills directory if not specified.
+    # This directory will be renamed later to "use-{cleaned_name}" by the LLM.
     if args.output is None:
         extracted_name = get_domain_name(args.url)
         print(f"Extracted domain name: {extracted_name}")
-        args.output = os.path.join('..', extracted_name)
+        args.output = get_default_output_dir(args.type, extracted_name)
 
     # Create output directory
     os.makedirs(args.output, exist_ok=True)

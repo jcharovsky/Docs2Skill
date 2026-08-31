@@ -141,10 +141,10 @@ This will:
 2. Scrape all pages from the same domain
 3. Convert HTML to Markdown and save to a temporary folder
 4. Clean playful URLs with LLM if needed
-5. Create final skill folder with `use-` prefix (e.g., `../use-phantombuster/`)
+5. Create final skill folder with `use-` prefix in the selected personal skills directory
 6. Generate a target-specific `SKILL.md` file using your configured LLM
 
-The skill folder is created as a sibling to Docs2Skill, keeping the tool directory clean.
+By default, the generated skill folder is created in the current user's personal skills directory: `~/.claude/skills/` for Claude or `~/.codex/skills/` for Codex.
 
 `--type` is required. Use `claude` for a Claude Code skill or `codex` for a Codex-compatible skill. Both targets preserve the same `resources/` Markdown files.
 
@@ -168,9 +168,11 @@ uv run docs2skill.py --url https://docs.example.com --type claude
 
 ## Output Structure
 
-After running the script from inside the Docs2Skill folder, you'll get:
+After generating a Claude skill, you'll get:
 
 ```
+
+For Codex, the generated skill follows the equivalent path: `~/.codex/skills/use-phantombuster/`.
 parent/
 ├── Docs2Skill/                       # Tool directory (stays clean)
 │   ├── docs2skill.py
@@ -179,7 +181,7 @@ parent/
 │   ├── uv.lock
 │   ├── .env
 │   └── README.md
-└── use-phantombuster/                # Generated skill (with use- prefix)
+└── .claude/skills/use-phantombuster/ # Generated skill (with use- prefix)
     ├── SKILL.md                      # LLM-generated skill instructions
     └── resources/                    # Supporting documentation
         ├── agents-fetch-output.md    # Descriptive multi-segment names
